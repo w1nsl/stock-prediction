@@ -10,3 +10,5 @@ __pycache__/
 # Airflow logs
 logs/
 scheduler/
+
+.env

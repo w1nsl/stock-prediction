@@ -4,7 +4,11 @@ from typing import List, Dict
 import psycopg2
 from psycopg2.extras import execute_batch
 from psycopg2 import Error as PgError
+import os
+from dotenv import load_dotenv
 
+# Load environment variables
+load_dotenv()
 
 FRED_API_KEY = '5634d0081e84d747c4413186eb2c19cb'
 fred = Fred(api_key=FRED_API_KEY)
@@ -211,12 +215,12 @@ if __name__ == '__main__':
         validate_data(df)
 
         db_params = {
-        'host': 'ep-small-flower-a1nl3blu-pooler.ap-southeast-1.aws.neon.tech',
-        'database': 'neondb',
-        'user': 'neondb_owner',
-        'password': 'npg_wsYAPzmg0I8S',
-        'port': 5432,
-        'sslmode': 'require'
+            'host': os.getenv('DB_HOST'),
+            'database': os.getenv('DB_NAME'),
+            'user': os.getenv('DB_USER'),
+            'password': os.getenv('DB_PASSWORD'),
+            'port': int(os.getenv('DB_PORT')),
+            'sslmode': os.getenv('DB_SSLMODE')
         }
 
         insert_fred_data_manual(df, db_params)

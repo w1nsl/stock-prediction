@@ -6,6 +6,11 @@ from typing import List
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 import psycopg2
 from psycopg2.extras import execute_batch
+import os
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # ------------------------------
 # Extract articles
@@ -200,13 +205,14 @@ if __name__ == "__main__":
     print("\nSample aggregated sentiment data:")
     print(df_daily.head())
 
+    # Using environment variables for database connection
     db_params = {
-        'host': 'ep-small-flower-a1nl3blu-pooler.ap-southeast-1.aws.neon.tech',
-        'database': 'neondb',
-        'user': 'neondb_owner',
-        'password': 'npg_wsYAPzmg0I8S',
-        'port': 5432,
-        'sslmode': 'require'
+        'host': os.getenv('DB_HOST'),
+        'database': os.getenv('DB_NAME'),
+        'user': os.getenv('DB_USER'),
+        'password': os.getenv('DB_PASSWORD'),
+        'port': int(os.getenv('DB_PORT')),
+        'sslmode': os.getenv('DB_SSLMODE')
     }
 
     insert_article_sentiment_manual(df_daily, db_params)

@@ -4,12 +4,17 @@ import psycopg2
 from psycopg2 import sql
 from psycopg2.extras import execute_batch
 from datetime import datetime
+import os
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 def download_stock_data(tickers, start_date, end_date):
     data = {}
     for ticker in tickers:
         try:
-            df = yf.download(ticker, start=start_date, end=end_date)
+            df = yf.download(ticker, start=start_date, end=end_date, auto_adjust=False)
             if not df.empty: #if can dl data then add
                 data[ticker] = df
             else:
@@ -22,29 +27,38 @@ def clean_stock_data(data_dict):
     cleaned_data = {}
     for ticker, df in data_dict.items():
         try:
-            cleaned_df = df[['Close', 'Adj Close', 'Volume']].copy()
-            cleaned_df = cleaned_df.dropna()
-            cleaned_df = cleaned_df.sort_index()
-            cleaned_data[ticker] = cleaned_df
+            # Reset the index to make Date a column
+            df = df.reset_index()
+            # Drop the Ticker level from columns
+            df.columns = df.columns.droplevel(1)
+            # Keep all columns
+            df = df[['Date', 'Open', 'High', 'Low', 'Close', 'Adj Close', 'Volume']]
+            # Set Date as index again
+            df = df.set_index('Date')
+            cleaned_data[ticker] = df
         except Exception as e:
             print(f"Error cleaning {ticker}: {e}")
     return cleaned_data
 
 def insert_stock_data(data_dict, db_params):
-
     create_table_sql = """
-    CREATE TABLE IF NOT EXISTS stock_data (
+    DROP TABLE IF EXISTS stock_data;
+    CREATE TABLE stock_data (
         ticker VARCHAR(10),
         date DATE,
-        close NUMERIC,
+        open_price NUMERIC,
+        high_price NUMERIC,
+        low_price NUMERIC,
+        close_price NUMERIC,
         adj_close NUMERIC,
         volume BIGINT,
         PRIMARY KEY (ticker, date)
+    );
     """
 
     insert_sql = """
-    INSERT INTO stock_data (ticker, date, close, adj_close, volume)
-    VALUES (%s, %s, %s, %s, %s)
+    INSERT INTO stock_data (ticker, date, open_price, high_price, low_price, close_price, adj_close, volume)
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
     ON CONFLICT (ticker, date) DO NOTHING
     """
 
@@ -60,9 +74,12 @@ def insert_stock_data(data_dict, db_params):
                 data_to_insert.append((
                     ticker,
                     date.to_pydatetime().date(),
-                    row['Close'],
-                    row['Adj Close'],
-                    row['Volume']
+                    float(row['Open']),
+                    float(row['High']),
+                    float(row['Low']),
+                    float(row['Close']),
+                    float(row['Adj Close']),
+                    int(row['Volume'])
                 ))
 
         execute_batch(cur, insert_sql, data_to_insert)
@@ -78,10 +95,9 @@ def insert_stock_data(data_dict, db_params):
             conn.close()
 
 if __name__ == "__main__":
-
-    tickers = ['AAPL', 'MSFT', 'GOOG', 'AMZN']
-    start_date = '2020-01-01'
-    end_date = '2023-01-01'
+    tickers = ['AAPL']  # Only AAPL to match article_sentiment.py
+    start_date = '2023-01-01'
+    end_date = '2023-03-01'
 
     raw_data = download_stock_data(tickers, start_date, end_date)
     cleaned_data = clean_stock_data(raw_data)
@@ -90,20 +106,21 @@ if __name__ == "__main__":
     for ticker, df in cleaned_data.items():
         print(f"\n{ticker} data (first 5 rows):")
         print(df.head())
+        
+        # Save CSV for each ticker
+        ''' csv_filename = f'{ticker}_cleaned_data.csv'
+        df.to_csv(csv_filename, index=True)
+        print(f"Saved to {csv_filename}")'''
 
-    csv_filename = f'{ticker}_cleaned_data.csv'
-    df.to_csv(csv_filename, index=True)
-    print(f"Saved to {csv_filename}")
-
-    # replace with actual credentials
+    # Using environment variables for database connection
     db_params = {
-        'host': 'localhost',
-        'database': 'stock_db',
-        'user': 'postgres',
-        'password': 'yourpassword',
-        'port': '5432'  # default PostgreSQL port
+        'host': os.getenv('DB_HOST'),
+        'database': os.getenv('DB_NAME'),
+        'user': os.getenv('DB_USER'),
+        'password': os.getenv('DB_PASSWORD'),
+        'port': int(os.getenv('DB_PORT')),
+        'sslmode': os.getenv('DB_SSLMODE')
     }
 
     insert_stock_data(cleaned_data, db_params)
-
     print("\nAll operations completed successfully!")
