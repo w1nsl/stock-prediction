@@ -203,7 +203,7 @@ def insert_fred_data_manual(df: pd.DataFrame, db_params: Dict[str, str]) -> None
 if __name__ == '__main__':
     try:
         print("Downloading and cleaning FRED data...")
-        df = download_fred_data()
+        df = download_fred_data(start_date='2023-01-01', end_date='2023-03-01')
         print("\nSample of downloaded data:")
         print(df.head())
         print("\nData shape:", df.shape)
@@ -211,11 +211,12 @@ if __name__ == '__main__':
         validate_data(df)
 
         db_params = {
-            'host': 'localhost',
-            'database': 'stock_db',
-            'user': 'postgres',
-            'password': 'yourpassword',
-            'port': '5432'
+        'host': 'ep-small-flower-a1nl3blu-pooler.ap-southeast-1.aws.neon.tech',
+        'database': 'neondb',
+        'user': 'neondb_owner',
+        'password': 'npg_wsYAPzmg0I8S',
+        'port': 5432,
+        'sslmode': 'require'
         }
 
         insert_fred_data_manual(df, db_params)

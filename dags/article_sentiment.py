@@ -22,13 +22,15 @@ def extract_articles(top_stocks: List[str] = None, date_filter: str = 'all', sta
 
     ds = load_dataset("benstaf/FNSPID-filtered-nasdaq-100")
     df = ds["train"].to_pandas()
-    df['Date'] = pd.to_datetime(df['Date'])
+    df['Date'] = pd.to_datetime(df['Date']).dt.tz_localize(None)  # Remove timezone information
 
     if date_filter == 'today':
         today = pd.Timestamp.now().normalize()
         df = df[df['Date'] >= today]
     elif start_date and end_date:
-        df = df[(df['Date'] >= pd.to_datetime(start_date)) & (df['Date'] <= pd.to_datetime(end_date))]
+        start_date = pd.to_datetime(start_date)
+        end_date = pd.to_datetime(end_date)
+        df = df[(df['Date'] >= start_date) & (df['Date'] <= end_date)]
 
     df = df[df['Stock_symbol'].isin(top_stocks)]
     return df
@@ -134,6 +136,9 @@ def insert_article_sentiment(df: pd.DataFrame, conn_id: str) -> None:
 # Manual insert into PostgreSQL
 # ------------------------------
 def insert_article_sentiment_manual(df: pd.DataFrame, db_params: dict) -> None:
+    import psycopg2
+    from psycopg2.extras import execute_batch
+
     create_table_query = """
     CREATE TABLE IF NOT EXISTS daily_article_sentiment (
         stock_symbol TEXT NOT NULL,
@@ -184,7 +189,7 @@ def insert_article_sentiment_manual(df: pd.DataFrame, db_params: dict) -> None:
 # Script entry point (manual)
 # ------------------------------
 if __name__ == "__main__":
-    tickers = ['AAPL', 'MSFT', 'GOOG', 'AMZN']
+    tickers = ['AAPL']
     start_date = '2023-01-01'
     end_date = '2023-03-01'
 
@@ -195,16 +200,13 @@ if __name__ == "__main__":
     print("\nSample aggregated sentiment data:")
     print(df_daily.head())
 
-    csv_filename = 'aggregated_article_sentiment.csv'
-    df_daily.to_csv(csv_filename, index=False)
-    print(f"Saved aggregated sentiment to {csv_filename}")
-
     db_params = {
-        'host': 'localhost',
-        'database': 'stock_db',
-        'user': 'postgres',
-        'password': 'yourpassword',
-        'port': '5432'
+        'host': 'ep-small-flower-a1nl3blu-pooler.ap-southeast-1.aws.neon.tech',
+        'database': 'neondb',
+        'user': 'neondb_owner',
+        'password': 'npg_wsYAPzmg0I8S',
+        'port': 5432,
+        'sslmode': 'require'
     }
 
     insert_article_sentiment_manual(df_daily, db_params)
