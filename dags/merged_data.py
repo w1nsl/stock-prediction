@@ -8,6 +8,8 @@ from stock_price import download_stock_data, clean_stock_data
 from us_economic_data import download_fred_data
 from tqdm import tqdm
 import time
+from multiprocessing import Pool, cpu_count
+from functools import partial
 
 # Load environment variables
 load_dotenv()
@@ -211,9 +213,29 @@ def insert_merged_data_to_db(df: pd.DataFrame, db_params: dict, table_name: str 
             cursor.close()
             conn.close()
 
+def process_single_stock(ticker: str, start_date: str, end_date: str, db_params: dict) -> tuple:
+    """
+    Process a single stock and return the result.
+    
+    Args:
+        ticker: Stock ticker symbol
+        start_date: Start date in 'YYYY-MM-DD' format
+        end_date: End date in 'YYYY-MM-DD' format
+        db_params: Database connection parameters
+        
+    Returns:
+        tuple: (ticker, success, error_message)
+    """
+    try:
+        merged_data = merge_all_data(ticker, start_date, end_date)
+        insert_merged_data_to_db(merged_data, db_params, table_name="merged_stock_data_top")
+        return (ticker, True, None)
+    except Exception as e:
+        return (ticker, False, str(e))
+
 if __name__ == "__main__":
     # List of stocks to process
-    stocks = ["AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "META", "TSLA", "AMD", "INTC", "AVGO"]
+    stocks = ["ADBE", "CMCSA", "QCOM", "GOOG", "PEP", "SBUX", "COST", "AMD", "INTC", "PYPL"]
     start_date = '2020-01-01'
     end_date = '2024-12-31'
     
@@ -227,33 +249,27 @@ if __name__ == "__main__":
         'sslmode': os.getenv('DB_SSLMODE')
     }
     
-    # Process each stock with progress bar
+    # Process stocks in parallel
     print(f"\nProcessing {len(stocks)} stocks from {start_date} to {end_date}")
-    successful_stocks = []
-    failed_stocks = []
     
-    for ticker in tqdm(stocks, desc="Overall Progress"):
-        print(f"\nProcessing {ticker}...")
-        try:
-            # Add progress bar for data merging
-            with tqdm(total=3, desc=f"{ticker} Progress") as pbar:
-                merged_data = merge_all_data(ticker, start_date, end_date)
-                pbar.update(1)
-                time.sleep(0.1)  # Small delay to make progress visible
-                
-                # Insert data into database
-                insert_merged_data_to_db(merged_data, db_params)
-                pbar.update(1)
-                time.sleep(0.1)
-                
-                successful_stocks.append(ticker)
-                pbar.update(1)
-                time.sleep(0.1)
-                
-        except Exception as e:
-            print(f"\nError processing {ticker}: {str(e)}")
-            failed_stocks.append(ticker)
-            continue
+    # Create a partial function with fixed parameters
+    process_func = partial(process_single_stock, 
+                         start_date=start_date, 
+                         end_date=end_date, 
+                         db_params=db_params)
+    
+    # Use number of CPU cores minus 1 to leave one core free for system processes
+    num_processes = max(1, cpu_count() - 1)
+    
+    # Process stocks in parallel with progress bar
+    with Pool(processes=num_processes) as pool:
+        results = list(tqdm(pool.imap(process_func, stocks), 
+                          total=len(stocks), 
+                          desc="Processing stocks"))
+    
+    # Separate successful and failed stocks
+    successful_stocks = [r[0] for r in results if r[1]]
+    failed_stocks = [(r[0], r[2]) for r in results if not r[1]]
     
     # Print summary
     print("\nProcessing Summary:")
@@ -262,4 +278,6 @@ if __name__ == "__main__":
         print("Successful stocks:", ", ".join(successful_stocks))
     if failed_stocks:
         print(f"Failed to process: {len(failed_stocks)} stocks")
-        print("Failed stocks:", ", ".join(failed_stocks))
+        print("Failed stocks with errors:")
+        for ticker, error in failed_stocks:
+            print(f"  - {ticker}: {error}")
