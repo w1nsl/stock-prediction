@@ -6,6 +6,8 @@ from dotenv import load_dotenv
 from article_sentiment import extract_articles, analyze_finbert_sentiment, aggregate_daily_sentiment
 from stock_price import download_stock_data, clean_stock_data
 from us_economic_data import download_fred_data
+from tqdm import tqdm
+import time
 
 # Load environment variables
 load_dotenv()
@@ -210,14 +212,10 @@ def insert_merged_data_to_db(df: pd.DataFrame, db_params: dict, table_name: str 
             conn.close()
 
 if __name__ == "__main__":
-    # Example usage
-    ticker = 'AAPL'
-    start_date = '2023-01-01'
-    end_date = '2023-03-01'
-    
-    merged_data = merge_all_data(ticker, start_date, end_date)
-    print("\nMerged Data Sample:")
-    print(merged_data.head())
+    # List of stocks to process
+    stocks = ["AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "META", "TSLA", "AMD", "INTC", "AVGO"]
+    start_date = '2020-01-01'
+    end_date = '2024-12-31'
     
     # Using environment variables for database connection
     db_params = {
@@ -229,6 +227,39 @@ if __name__ == "__main__":
         'sslmode': os.getenv('DB_SSLMODE')
     }
     
-    # Insert data into database
-    insert_merged_data_to_db(merged_data, db_params)
-    print("\nData successfully inserted into database")
+    # Process each stock with progress bar
+    print(f"\nProcessing {len(stocks)} stocks from {start_date} to {end_date}")
+    successful_stocks = []
+    failed_stocks = []
+    
+    for ticker in tqdm(stocks, desc="Overall Progress"):
+        print(f"\nProcessing {ticker}...")
+        try:
+            # Add progress bar for data merging
+            with tqdm(total=3, desc=f"{ticker} Progress") as pbar:
+                merged_data = merge_all_data(ticker, start_date, end_date)
+                pbar.update(1)
+                time.sleep(0.1)  # Small delay to make progress visible
+                
+                # Insert data into database
+                insert_merged_data_to_db(merged_data, db_params)
+                pbar.update(1)
+                time.sleep(0.1)
+                
+                successful_stocks.append(ticker)
+                pbar.update(1)
+                time.sleep(0.1)
+                
+        except Exception as e:
+            print(f"\nError processing {ticker}: {str(e)}")
+            failed_stocks.append(ticker)
+            continue
+    
+    # Print summary
+    print("\nProcessing Summary:")
+    print(f"Successfully processed: {len(successful_stocks)} stocks")
+    if successful_stocks:
+        print("Successful stocks:", ", ".join(successful_stocks))
+    if failed_stocks:
+        print(f"Failed to process: {len(failed_stocks)} stocks")
+        print("Failed stocks:", ", ".join(failed_stocks))

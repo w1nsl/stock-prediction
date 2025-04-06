@@ -23,7 +23,7 @@ def extract_articles(top_stocks: List[str] = None, date_filter: str = 'all', sta
     If date_filter is 'today', returns only today's articles.
     """
     if top_stocks is None:
-        top_stocks = ["AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "META", "TSLA", "AMD", "INTC", "ADBE"]
+        top_stocks = ["AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "META", "TSLA", "AMD", "INTC", "AVGO"]
 
     ds = load_dataset("benstaf/FNSPID-filtered-nasdaq-100")
     df = ds["train"].to_pandas()
