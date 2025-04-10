@@ -23,27 +23,40 @@ def extract_articles(top_stocks: List[str] = None, date_filter: str = 'all', sta
     If date_filter is 'today', returns only today's articles.
     """
     if top_stocks is None:
-        top_stocks = ["AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "META", "TSLA", "AMD", "INTC", "AVGO"]
-
+        top_stocks = [
+        "ADBE", "CMCSA", "QCOM", "GOOG", "PEP",
+        "SBUX", "COST", "AMD", "INTC", "PYPL"
+    ]
+            
     ds = load_dataset("benstaf/FNSPID-filtered-nasdaq-100")
     df = ds["train"].to_pandas()
-    df['Date'] = pd.to_datetime(df['Date']).dt.tz_localize(None)  # Remove timezone information
+    
+    # Convert to datetime and localize timezone to match input
+    df['Date'] = pd.to_datetime(df['Date']).dt.tz_localize(None)
 
+    # Filter by date range if provided
     if date_filter == 'today':
         today = pd.Timestamp.now().normalize()
         df = df[df['Date'] >= today]
     elif start_date and end_date:
-        start_date = pd.to_datetime(start_date)
-        end_date = pd.to_datetime(end_date)
-        df = df[(df['Date'] >= start_date) & (df['Date'] <= end_date)]
+        df = df[df['Date'] >= pd.to_datetime(start_date).tz_localize(None)]
+        df = df[df['Date'] <= pd.to_datetime(end_date).tz_localize(None)]
 
-    df = df[df['Stock_symbol'].isin(top_stocks)]
+    # Filter by selected symbols
+    df = df[df['Stock_symbol'].isin(top_stocks)].copy()
+    
+    # Remove empty articles
+    df = df[df['Article'].str.strip() != '']
+    
+    # Remove duplicates based on Article content and URL
+    df = df.drop_duplicates(subset=['Article', 'Url'])
+
     return df
 
 # ------------------------------
 # Analyze sentiment
 # ------------------------------
-def analyze_finbert_sentiment(df, text_columns=None, model_name="yiyanghkust/finbert-tone"):
+def analyze_finbert_sentiment(df, text_columns=None, model_name="ProsusAI/finbert"):
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     model = AutoModelForSequenceClassification.from_pretrained(model_name)
     sentiment_pipeline = pipeline("sentiment-analysis", model=model, tokenizer=tokenizer)
@@ -54,35 +67,72 @@ def analyze_finbert_sentiment(df, text_columns=None, model_name="yiyanghkust/fin
     df = df[keep_cols + text_columns].copy()
 
     label_to_score = {"positive": 1, "neutral": 0, "negative": -1}
-
+    
     def get_average_sentiment(row):
         sentiments = []
         for col in text_columns:
-            text = str(row[col])[:512]
+            text = str(row[col])[:512]  # truncate to safe length
             try:
                 result = sentiment_pipeline(text)[0]
-                score = label_to_score.get(result['label'].lower(), 0)
+                sentiment_label = result['label'].lower()
+                confidence = result['score']
+                score = label_to_score.get(sentiment_label, 0) * confidence
                 sentiments.append(score)
             except Exception:
-                sentiments.append(0)
+                sentiments.append(0)  # default to neutral on error
         return sum(sentiments) / len(sentiments) if sentiments else 0
-
+    
     df['avg_sentiment'] = df.apply(get_average_sentiment, axis=1)
+    
     return df
 
 # ------------------------------
 # Aggregate sentiment per day and stock
 # ------------------------------
 def aggregate_daily_sentiment(df, sentiment_column='avg_sentiment'):
-    df_daily = (
-        df.groupby(['Stock_symbol', 'Date'])
-          .agg(
-              daily_sentiment=(sentiment_column, 'mean'),
-              article_count=(sentiment_column, 'count'),
-              sentiment_std=(sentiment_column, 'std')
-          )
+    df = df.copy()
+    
+    # Ensure 'Date' is datetime if not already
+    df['Date'] = pd.to_datetime(df['Date']).dt.date
+
+    def compute_ratios(group):
+        total = len(group)
+        pos_ratio = (group[sentiment_column] > 0).sum() / total
+        neg_ratio = (group[sentiment_column] < 0).sum() / total
+        neu_ratio = (group[sentiment_column] == 0).sum() / total
+        return pd.Series({
+            'positive_ratio': pos_ratio,
+            'negative_ratio': neg_ratio,
+            'neutral_ratio': neu_ratio
+        })
+
+    # Aggregate basic stats
+    df_stats = (
+        df.groupby(['Stock_symbol', 'Date'])[sentiment_column]
+          .agg([
+              ('daily_sentiment', 'mean'),
+              ('sentiment_std', 'std'), 
+              ('article_count', 'count'),
+              ('sentiment_median', 'median'),
+              ('sentiment_min', 'min'),
+              ('sentiment_max', 'max')
+          ])
           .reset_index()
     )
+
+    # Compute ratio features
+    df_ratios = (
+        df.groupby(['Stock_symbol', 'Date'])
+          .apply(compute_ratios)
+          .reset_index()
+    )
+
+    # Merge stats + ratios
+    df_daily = pd.merge(df_stats, df_ratios, on=['Stock_symbol', 'Date'])
+
+    # Add sentiment range (max - min)
+    df_daily['sentiment_range'] = df_daily['sentiment_max'] - df_daily['sentiment_min']
+
     return df_daily
 
 # ------------------------------
@@ -92,7 +142,9 @@ def insert_article_sentiment(df: pd.DataFrame, conn_id: str) -> None:
     """
     Inserts daily article sentiment into the PostgreSQL database.
     Parameters:
-        df (pd.DataFrame): DataFrame containing stock_symbol, date, daily_sentiment, article_count, sentiment_std.
+        df (pd.DataFrame): DataFrame containing stock_symbol, date, daily_sentiment, article_count, sentiment_std,
+                          positive_ratio, negative_ratio, neutral_ratio, sentiment_median, sentiment_min, sentiment_max,
+                          sentiment_range.
         conn_id (str): Airflow connection ID for PostgreSQL.
     """
     hook = PostgresHook(postgres_conn_id=conn_id)
@@ -106,12 +158,23 @@ def insert_article_sentiment(df: pd.DataFrame, conn_id: str) -> None:
         daily_sentiment FLOAT,
         article_count INTEGER,
         sentiment_std FLOAT,
+        positive_ratio FLOAT,
+        negative_ratio FLOAT,
+        neutral_ratio FLOAT,
+        sentiment_median FLOAT,
+        sentiment_min FLOAT,
+        sentiment_max FLOAT,
+        sentiment_range FLOAT,
         PRIMARY KEY (stock_symbol, date)
     );
     """
     insert_query = """
-        INSERT INTO daily_article_sentiment (stock_symbol, date, daily_sentiment, article_count, sentiment_std)
-        VALUES (%s, %s, %s, %s, %s)
+        INSERT INTO daily_article_sentiment (
+            stock_symbol, date, daily_sentiment, article_count, sentiment_std,
+            positive_ratio, negative_ratio, neutral_ratio, sentiment_median,
+            sentiment_min, sentiment_max, sentiment_range
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (stock_symbol, date) DO NOTHING;
     """
 
@@ -123,7 +186,14 @@ def insert_article_sentiment(df: pd.DataFrame, conn_id: str) -> None:
                 row['Date'],
                 row['daily_sentiment'],
                 row['article_count'],
-                row['sentiment_std']
+                row['sentiment_std'],
+                row['positive_ratio'],
+                row['negative_ratio'],
+                row['neutral_ratio'],
+                row['sentiment_median'],
+                row['sentiment_min'],
+                row['sentiment_max'],
+                row['sentiment_range']
             ))
         conn.commit()
         print(f"Inserted {len(df)} article sentiment records into the database.")
@@ -151,13 +221,24 @@ def insert_article_sentiment_manual(df: pd.DataFrame, db_params: dict) -> None:
         daily_sentiment FLOAT,
         article_count INTEGER,
         sentiment_std FLOAT,
+        positive_ratio FLOAT,
+        negative_ratio FLOAT,
+        neutral_ratio FLOAT,
+        sentiment_median FLOAT,
+        sentiment_min FLOAT,
+        sentiment_max FLOAT,
+        sentiment_range FLOAT,
         PRIMARY KEY (stock_symbol, date)
     );
     """
 
     insert_query = """
-    INSERT INTO daily_article_sentiment (stock_symbol, date, daily_sentiment, article_count, sentiment_std)
-    VALUES (%s, %s, %s, %s, %s)
+    INSERT INTO daily_article_sentiment (
+        stock_symbol, date, daily_sentiment, article_count, sentiment_std,
+        positive_ratio, negative_ratio, neutral_ratio, sentiment_median,
+        sentiment_min, sentiment_max, sentiment_range
+    )
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
     ON CONFLICT (stock_symbol, date) DO NOTHING;
     """
 
@@ -173,7 +254,14 @@ def insert_article_sentiment_manual(df: pd.DataFrame, db_params: dict) -> None:
                 row['Date'],
                 row['daily_sentiment'],
                 row['article_count'],
-                row['sentiment_std']
+                row['sentiment_std'],
+                row['positive_ratio'],
+                row['negative_ratio'],
+                row['neutral_ratio'],
+                row['sentiment_median'],
+                row['sentiment_min'],
+                row['sentiment_max'],
+                row['sentiment_range']
             )
             for _, row in df.iterrows()
         ]
