@@ -117,18 +117,22 @@ def aggregate_daily_sentiment(df, sentiment_column='avg_sentiment'):
               ('sentiment_min', 'min'),
               ('sentiment_max', 'max')
           ])
-          .reset_index()
     )
 
     # Compute ratio features
     df_ratios = (
         df.groupby(['Stock_symbol', 'Date'])
           .apply(compute_ratios)
-          .reset_index()
     )
 
-    # Merge stats + ratios
-    df_daily = pd.merge(df_stats, df_ratios, on=['Stock_symbol', 'Date'])
+    # Reset index once after merging to avoid duplicate columns
+    df_daily = pd.merge(
+        df_stats, 
+        df_ratios,
+        left_index=True,
+        right_index=True
+    ).reset_index()
+
 
     # Add sentiment range (max - min)
     df_daily['sentiment_range'] = df_daily['sentiment_max'] - df_daily['sentiment_min']

@@ -1,12 +1,14 @@
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from psycopg2.extensions import cursor
 
+CONN_ID = 'postgres_default'
+
 class Connection:
     def __init__(self) -> None:
         self.conn = None
         self.cur = None
 
-    def connect(self, conn_id: str) -> None:
+    def connect(self, conn_id: str = CONN_ID) -> None:
         hook = PostgresHook(postgres_conn_id=conn_id)
         self.conn = hook.get_conn()
         self.cur = self.conn.cursor()
@@ -15,9 +17,15 @@ class Connection:
         self.cur.close()
         self.conn.close()
     
-    def init_db(self) -> cursor:
-        if not self.conn:
-            self.connect()
+    def initialise_db(self, connection=None, conn_id: str = CONN_ID) -> str:
+        """Initialize database tables
+        Args:
+            connection: Optional Connection instance (not used, kept for compatibility)
+            conn_id: Airflow connection ID for PostgreSQL
+        Returns:
+            conn_id: The connection ID used
+        """
+        self.connect(conn_id=conn_id)
         query = '''
             CREATE table if not EXISTS Company ( 
                 company_id SERIAL PRIMARY KEY, 
@@ -56,3 +64,4 @@ class Connection:
         self.cur.execute(query)
         self.conn.commit()
         self.exit()
+        return conn_id
