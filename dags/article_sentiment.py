@@ -22,67 +22,83 @@ def extract_articles(top_stocks: List[str] = None, date_filter: str = 'all', sta
     If start_date and end_date are provided, filters within that range.
     If date_filter is 'today', returns only today's articles.
     """
+    print(f"Starting article extraction with parameters: stocks={top_stocks}, date_filter={date_filter}, start_date={start_date}, end_date={end_date}")
+    
     if top_stocks is None:
         top_stocks = [
         "ADBE", "CMCSA", "QCOM", "GOOG", "PEP",
         "SBUX", "COST", "AMD", "INTC", "PYPL"
     ]
+        print(f"No stocks provided, using default list: {top_stocks}")
             
+    print("Loading dataset from benstaf/FNSPID-filtered-nasdaq-100...")
     ds = load_dataset("benstaf/FNSPID-filtered-nasdaq-100")
     df = ds["train"].to_pandas()
+    print(f"Dataset loaded with {len(df)} initial articles")
     
     # Convert to datetime and localize timezone to match input
     df['Date'] = pd.to_datetime(df['Date']).dt.tz_localize(None)
+    print("Converted dates to timezone-naive datetime format")
 
     # Filter by date range if provided
     if date_filter == 'today':
         today = pd.Timestamp.now().normalize()
         df = df[df['Date'] >= today]
+        print(f"Filtered for today's articles only: {today}")
     elif start_date and end_date:
-        df = df[df['Date'] >= pd.to_datetime(start_date).tz_localize(None)]
-        df = df[df['Date'] <= pd.to_datetime(end_date).tz_localize(None)]
+        start_dt = pd.to_datetime(start_date).tz_localize(None)
+        end_dt = pd.to_datetime(end_date).tz_localize(None)
+        df = df[df['Date'] >= start_dt]
+        df = df[df['Date'] <= end_dt]
+        print(f"Filtered for date range: {start_dt} to {end_dt}, remaining articles: {len(df)}")
 
     # Filter by selected symbols
     df = df[df['Stock_symbol'].isin(top_stocks)].copy()
+    print(f"Filtered for selected stock symbols, remaining articles: {len(df)}")
     
     # Remove empty articles
+    empty_count = df['Article'].str.strip().eq('').sum()
     df = df[df['Article'].str.strip() != '']
+    print(f"Removed {empty_count} empty articles, remaining: {len(df)}")
     
     # Remove duplicates based on Article content and URL
+    dup_count = len(df) - len(df.drop_duplicates(subset=['Article', 'Url']))
     df = df.drop_duplicates(subset=['Article', 'Url'])
+    print(f"Removed {dup_count} duplicate articles, final count: {len(df)}")
+    
+    # Print summary of articles per stock
+    stock_counts = df['Stock_symbol'].value_counts()
+    print("Articles per stock:")
+    for stock, count in stock_counts.items():
+        print(f"  {stock}: {count}")
 
     return df
 
 # ------------------------------
 # Analyze sentiment
 # ------------------------------
-def analyze_finbert_sentiment(df, text_columns=None, model_name="ProsusAI/finbert"):
+def analyze_sentiment(df, model_name="ProsusAI/finbert"):
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     model = AutoModelForSequenceClassification.from_pretrained(model_name)
     sentiment_pipeline = pipeline("sentiment-analysis", model=model, tokenizer=tokenizer)
 
-    keep_cols = ['Date', 'Stock_symbol', 'Article_title', 'Article']
-    if text_columns is None:
-        text_columns = ['Lsa_summary', 'Luhn_summary', 'Textrank_summary', 'Lexrank_summary']
-    df = df[keep_cols + text_columns].copy()
+    keep_cols = ['Date', 'Stock_symbol', 'Article_title', 'Article', 'Textrank_summary']
+    df = df[keep_cols].copy()
 
     label_to_score = {"positive": 1, "neutral": 0, "negative": -1}
     
-    def get_average_sentiment(row):
-        sentiments = []
-        for col in text_columns:
-            text = str(row[col])[:512]  # truncate to safe length
-            try:
-                result = sentiment_pipeline(text)[0]
-                sentiment_label = result['label'].lower()
-                confidence = result['score']
-                score = label_to_score.get(sentiment_label, 0) * confidence
-                sentiments.append(score)
-            except Exception:
-                sentiments.append(0)  # default to neutral on error
-        return sum(sentiments) / len(sentiments) if sentiments else 0
+    def get_textrank_sentiment(row):
+        text = str(row['Textrank_summary'])[:512]  # truncate to safe length
+        try:
+            result = sentiment_pipeline(text)[0]
+            sentiment_label = result['label'].lower()
+            confidence = result['score']
+            score = label_to_score.get(sentiment_label, 0) * confidence
+            return score
+        except Exception:
+            return 0  # default to neutral on error
     
-    df['avg_sentiment'] = df.apply(get_average_sentiment, axis=1)
+    df['avg_sentiment'] = df.apply(get_textrank_sentiment, axis=1)
     
     return df
 
@@ -179,7 +195,18 @@ def insert_article_sentiment(df: pd.DataFrame, conn_id: str) -> None:
             sentiment_min, sentiment_max, sentiment_range
         )
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        ON CONFLICT (stock_symbol, date) DO NOTHING;
+        ON CONFLICT (stock_symbol, date) 
+        DO UPDATE SET
+            daily_sentiment = EXCLUDED.daily_sentiment,
+            article_count = EXCLUDED.article_count,
+            sentiment_std = EXCLUDED.sentiment_std,
+            positive_ratio = EXCLUDED.positive_ratio,
+            negative_ratio = EXCLUDED.negative_ratio,
+            neutral_ratio = EXCLUDED.neutral_ratio,
+            sentiment_median = EXCLUDED.sentiment_median,
+            sentiment_min = EXCLUDED.sentiment_min,
+            sentiment_max = EXCLUDED.sentiment_max,
+            sentiment_range = EXCLUDED.sentiment_range;
     """
 
     try:
@@ -200,7 +227,7 @@ def insert_article_sentiment(df: pd.DataFrame, conn_id: str) -> None:
                 row['sentiment_range']
             ))
         conn.commit()
-        print(f"Inserted {len(df)} article sentiment records into the database.")
+        print(f"Inserted/Updated {len(df)} article sentiment records into the database.")
 
     except Exception as e:
         conn.rollback()
@@ -291,11 +318,11 @@ if __name__ == "__main__":
     end_date = '2023-03-01'
 
     df_raw = extract_articles(top_stocks=tickers, start_date=start_date, end_date=end_date)
-    df_scored = analyze_finbert_sentiment(df_raw)
-    df_daily = aggregate_daily_sentiment(df_scored)
+    #df_scored = analyze_finbert_sentiment(df_raw)
+    #df_daily = aggregate_daily_sentiment(df_scored)
 
-    print("\nSample aggregated sentiment data:")
-    print(df_daily.head())
+    #print("\nSample aggregated sentiment data:")
+    #print(df_daily.head())
 
     # Using environment variables for database connection
     db_params = {
@@ -307,5 +334,5 @@ if __name__ == "__main__":
         'sslmode': os.getenv('DB_SSLMODE')
     }
 
-    insert_article_sentiment_manual(df_daily, db_params)
+    #insert_article_sentiment_manual(df_daily, db_params)
     print("\nAll operations completed successfully!")

@@ -6,6 +6,7 @@ from psycopg2.extras import execute_batch
 from psycopg2 import Error as PgError
 import os
 from dotenv import load_dotenv
+from airflow.providers.postgres.hooks.postgres import PostgresHook
 
 # Load environment variables
 load_dotenv()
@@ -143,8 +144,8 @@ def validate_data(df: pd.DataFrame) -> None:
         print("Warning: Negative SP500 values found")
 
 
-def insert_fred_data_manual(df: pd.DataFrame, db_params: Dict[str, str]) -> None:
-    """Insert economic data into PostgreSQL database."""
+def insert_fred_data_manual(df: pd.DataFrame, conn_id: str) -> None:
+    """Insert economic data into PostgreSQL database using Airflow connection."""
     if df.empty:
         raise ValueError("No data to insert")
     
@@ -172,12 +173,16 @@ def insert_fred_data_manual(df: pd.DataFrame, db_params: Dict[str, str]) -> None
     ON CONFLICT (date) DO NOTHING;
     """
 
-    conn = None
     try:
-        conn = psycopg2.connect(**db_params)
+        # Get connection using Airflow hook
+        hook = PostgresHook(postgres_conn_id=conn_id)
+        conn = hook.get_conn()
         cur = conn.cursor()
+        
+        # Create table
         cur.execute(create_table_query)
 
+        # Prepare data for insertion
         records = [
             (
                 row['date'],
@@ -191,16 +196,20 @@ def insert_fred_data_manual(df: pd.DataFrame, db_params: Dict[str, str]) -> None
             for _, row in df.iterrows()
         ]
 
+        # Insert data
         execute_batch(cur, insert_query, records)
         conn.commit()
         print(f"Successfully inserted {len(records)} economic metric records into the database.")
+        
     except Exception as e:
-        if conn:
+        if 'conn' in locals():
             conn.rollback()
         print(f"Error inserting data: {e}")
+        raise
     finally:
-        if conn:
+        if 'cur' in locals():
             cur.close()
+        if 'conn' in locals():
             conn.close()
 
 
@@ -214,16 +223,8 @@ if __name__ == '__main__':
 
         validate_data(df)
 
-        db_params = {
-            'host': os.getenv('DB_HOST'),
-            'database': os.getenv('DB_NAME'),
-            'user': os.getenv('DB_USER'),
-            'password': os.getenv('DB_PASSWORD'),
-            'port': int(os.getenv('DB_PORT')),
-            'sslmode': os.getenv('DB_SSLMODE')
-        }
-
-        insert_fred_data_manual(df, db_params)
+        # Use Airflow connection ID
+        insert_fred_data_manual(df, 'neon_db')
         print("\nAll operations completed successfully!")
     except Exception as e:
         print(f"\nError in main execution: {e}")
