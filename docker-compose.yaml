@@ -1,4 +1,3 @@
-version: '3.8'
 
 x-airflow-common:
   &airflow-common
@@ -19,6 +18,7 @@ x-airflow-common:
     - ./dags:/opt/airflow/dags
     - ./logs:/opt/airflow/logs
     - ./plugins:/opt/airflow/plugins
+    - ./models:/opt/airflow/models
   user: "${AIRFLOW_UID:-50000}:0"
   depends_on:
     redis:
@@ -95,6 +95,9 @@ services:
     depends_on:
       airflow-init:
         condition: service_completed_successfully
+    volumes:
+      - ~/.cache/huggingface:/home/airflow/.cache/huggingface
+
 
   airflow-triggerer:
     <<: *airflow-common

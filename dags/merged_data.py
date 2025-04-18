@@ -17,92 +17,119 @@ from airflow.hooks.postgres_hook import PostgresHook
 # Load environment variables
 load_dotenv()
 
-def merge_all_data(ticker: str, start_date: str, end_date: str) -> pd.DataFrame:
+def merge_all_data(stock_symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
     """
-    Merge stock price, article sentiment, and economic data from existing database tables.
+    Merge stock price, sentiment, and economic data for a given stock symbol and date range.
+    Handles missing stock price data by forward filling from the previous day.
     
     Args:
-        ticker: Stock ticker symbol
+        stock_symbol: Stock symbol to merge data for
         start_date: Start date in 'YYYY-MM-DD' format
         end_date: End date in 'YYYY-MM-DD' format
         
     Returns:
         DataFrame containing merged data
     """
-    print(f"\nProcessing {ticker} from {start_date} to {end_date}")
-    
     try:
-        # Get the Postgres connection from Airflow
+        # Get database connection
         pg_hook = PostgresHook(postgres_conn_id='neon_db')
+        conn = pg_hook.get_conn()
         
-        # Query to join all three tables
-        query = """
-        SELECT 
-            sd.date,
-            sd.ticker as stock_symbol,
-            sd.open_price,
-            sd.high_price,
-            sd.low_price,
-            sd.close_price,
-            sd.adj_close,
-            sd.volume,
-            das.daily_sentiment,
-            das.article_count,
-            das.sentiment_std,
-            das.positive_ratio,
-            das.negative_ratio,
-            das.neutral_ratio,
-            das.sentiment_median,
-            das.sentiment_min,
-            das.sentiment_max,
-            das.sentiment_range,
-            ued.gdp,
-            ued.real_gdp,
-            ued.unemployment_rate,
-            ued.cpi,
-            ued.fed_funds_rate,
-            ued.sp500
-        FROM stock_data sd
-        LEFT JOIN daily_article_sentiment das 
-            ON sd.date = das.date AND sd.ticker = das.stock_symbol
-        LEFT JOIN us_economic_data_daily ued 
-            ON sd.date = ued.date
-        WHERE sd.ticker = %s
-            AND sd.date BETWEEN %s AND %s
-        ORDER BY sd.date
+        # Get stock price data
+        stock_query = f"""
+        SELECT * FROM stock_data 
+        WHERE ticker = '{stock_symbol}'
+        AND date >= '{start_date}'
+        AND date <= '{end_date}'
+        ORDER BY date
         """
+        stock_df = pd.read_sql(stock_query, conn)
         
-        # Execute the query
-        df = pg_hook.get_pandas_df(query, parameters=(ticker, start_date, end_date))
+        # Create a complete date range
+        date_range = pd.date_range(start=start_date, end=end_date, freq='D')
+        date_df = pd.DataFrame({'date': date_range})
         
-        if df.empty:
-            raise ValueError(f"No data found for {ticker} in the specified date range")
+        # If we have stock data, merge it with the complete date range
+        if not stock_df.empty:
+            # Convert date to datetime for merging
+            stock_df['date'] = pd.to_datetime(stock_df['date'])
             
-        # Ensure date is in the correct format
-        df['date'] = pd.to_datetime(df['date']).dt.date
+            # Merge with complete date range
+            stock_df = date_df.merge(stock_df, on='date', how='left')
+            
+            # Forward fill missing stock data
+            stock_cols = ['open_price', 'high_price', 'low_price', 'close_price', 
+                         'adj_close', 'volume', 'stock_symbol']
+            stock_df[stock_cols] = stock_df[stock_cols].ffill()
+            
+            # Backward fill stock_symbol for any remaining missing values
+            stock_df['stock_symbol'] = stock_df['stock_symbol'].bfill()
+        else:
+            # If no stock data, create empty DataFrame with complete date range
+            stock_df = date_df
+            stock_df['stock_symbol'] = stock_symbol
+            for col in ['open_price', 'high_price', 'low_price', 'close_price', 
+                       'adj_close', 'volume']:
+                stock_df[col] = None
         
-        # Fill missing sentiment values with 0
-        sentiment_cols = [
-            'daily_sentiment', 'article_count', 'sentiment_std',
-            'positive_ratio', 'negative_ratio', 'neutral_ratio',
-            'sentiment_median', 'sentiment_min', 'sentiment_max',
-            'sentiment_range'
-        ]
-        for col in sentiment_cols:
-            df[col] = df[col].fillna(0)
-            
-        # Fill missing economic indicators using forward fill
-        economic_cols = [
-            'gdp', 'real_gdp', 'unemployment_rate', 
-            'cpi', 'fed_funds_rate', 'sp500'
-        ]
-        for col in economic_cols:
-            df[col] = df[col].ffill()
-            
-        return df
+        # Get sentiment data
+        sentiment_query = f"""
+        SELECT * FROM daily_article_sentiment 
+        WHERE stock_symbol = '{stock_symbol}'
+        AND date >= '{start_date}'
+        AND date <= '{end_date}'
+        ORDER BY date
+        """
+        sentiment_df = pd.read_sql(sentiment_query, conn)
+        
+        # Get economic data
+        economic_query = f"""
+        SELECT * FROM us_economic_data_daily 
+        WHERE date >= '{start_date}'
+        AND date <= '{end_date}'
+        ORDER BY date
+        """
+        economic_df = pd.read_sql(economic_query, conn)
+        
+        # Close database connection
+        conn.close()
+        
+        # Convert dates to datetime for merging
+        sentiment_df['date'] = pd.to_datetime(sentiment_df['date'])
+        economic_df['date'] = pd.to_datetime(economic_df['date'])
+        
+        # Merge all data
+        merged_df = stock_df.merge(sentiment_df, on=['date', 'stock_symbol'], how='left')
+        merged_df = merged_df.merge(economic_df, on='date', how='left')
+        
+        # Fill missing values
+        # Forward fill stock data
+        stock_cols = ['open_price', 'high_price', 'low_price', 'close_price', 
+                     'adj_close', 'volume']
+        merged_df[stock_cols] = merged_df[stock_cols].ffill()
+        
+        # Forward fill economic data
+        economic_cols = ['gdp', 'real_gdp', 'unemployment_rate', 'cpi', 
+                        'fed_funds_rate', 'sp500']
+        merged_df[economic_cols] = merged_df[economic_cols].ffill()
+        
+        # Fill sentiment data with zeros where missing
+        sentiment_cols = ['daily_sentiment', 'article_count', 'sentiment_std', 
+                         'positive_ratio', 'negative_ratio', 'neutral_ratio', 
+                         'sentiment_median', 'sentiment_min', 'sentiment_max', 
+                         'sentiment_range']
+        merged_df[sentiment_cols] = merged_df[sentiment_cols].fillna(0)
+        
+        # Ensure stock_symbol is filled
+        merged_df['stock_symbol'] = merged_df['stock_symbol'].fillna(stock_symbol)
+        
+        # Sort by date
+        merged_df = merged_df.sort_values('date')
+        
+        return merged_df
         
     except Exception as e:
-        print(f"\nError processing {ticker}: {str(e)}")
+        print(f"Error merging data for {stock_symbol}: {str(e)}")
         raise
 
 def insert_merged_data_to_db(df: pd.DataFrame, table_name: str = "merged_stock_data"):
