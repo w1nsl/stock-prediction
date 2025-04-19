@@ -214,6 +214,14 @@ def load_features_to_db(df: pd.DataFrame, table_name: str = "ml_features"):
         cursor.execute(create_table_query)
         conn.commit()
         
+        # Create indexes if they don't exist
+        create_index_query = f"""
+        CREATE INDEX IF NOT EXISTS idx_ml_features_stock_date ON {table_name}(stock_symbol, date);
+        CREATE INDEX IF NOT EXISTS idx_ml_features_date_target ON {table_name}(date, target);
+        """
+        cursor.execute(create_index_query)
+        conn.commit()
+        
         # Prepare records for batch insert
         records = [
             (
@@ -570,6 +578,13 @@ def save_predictions_to_db(predictions: pd.DataFrame, table_name: str = "stock_p
             )
             """
             cursor.execute(create_table_query)
+            conn.commit()
+            
+            # Create index if it doesn't exist
+            create_index_query = f"""
+            CREATE INDEX IF NOT EXISTS idx_predictions_stock_date ON {table_name}(stock_symbol, date);
+            """
+            cursor.execute(create_index_query)
             conn.commit()
         else:
             print(f"Table {table_name} already exists, skipping creation")

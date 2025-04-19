@@ -187,6 +187,9 @@ def insert_article_sentiment(df: pd.DataFrame, conn_id: str) -> None:
         sentiment_range FLOAT,
         PRIMARY KEY (stock_symbol, date)
     );
+    
+    CREATE INDEX IF NOT EXISTS idx_sentiment_date ON daily_article_sentiment(date);
+    CREATE INDEX IF NOT EXISTS idx_sentiment_stock_date_sentiment ON daily_article_sentiment(stock_symbol, date, daily_sentiment);
     """
     insert_query = """
         INSERT INTO daily_article_sentiment (

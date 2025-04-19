@@ -179,6 +179,13 @@ def insert_merged_data_to_db(df: pd.DataFrame, table_name: str = "merged_stock_d
         """
         cursor.execute(create_table_query)
         
+        # Create indexes if they don't exist
+        create_index_query = f"""
+        CREATE INDEX IF NOT EXISTS idx_merged_stock_date ON {table_name}(stock_symbol, date);
+        CREATE INDEX IF NOT EXISTS idx_merged_date_adj_close ON {table_name}(date, adj_close);
+        """
+        cursor.execute(create_index_query)
+        
         # Prepare records for batch insert
         records = [
             (

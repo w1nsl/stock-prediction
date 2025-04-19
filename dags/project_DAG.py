@@ -13,14 +13,7 @@ from ml_pipeline import pull_stock_data, engineer_features, load_features_to_db,
 
 load_dotenv()
 
-STOCKS = [
-    #"ADBE", "CMCSA", "QCOM", 
-    "GOOG",
-    # "PEP",
-    #"SBUX", "COST", "AMD", 
-    "INTC", 
-    #"PYPL"
-]
+STOCKS = ["ADBE", "CMCSA", "QCOM", "GOOG", "PEP", "SBUX", "COST", "AMD", "INTC", "PYPL"]
 
 # Specify date range here. If None, will use execution date
 START_DATE = "2023-12-16"  
@@ -460,10 +453,51 @@ def stock_prediction_pipeline():
         Function to check if a model exists for a given stock symbol and log the results.
         """
         import logging
-        logging.info(f"Checking model for stock: {stock_symbol}")
-        exists, needs_retraining, model_path = check_model_exists(stock_symbol)
-        logging.info(f"Model exists: {exists}, Needs retraining: {needs_retraining}, Model path: {model_path}")
-        return exists, needs_retraining, model_path
+        import os
+        import sys
+        import traceback
+        
+        logging.info(f"Starting model check for stock: {stock_symbol}")
+        try:
+            # Log paths being checked
+            model_dir = "models"
+            model_path = f"{model_dir}/{stock_symbol}_model.pkl"
+            metadata_path = f"{model_dir}/{stock_symbol}_metadata.pkl"
+            
+            # Make sure the models directory exists
+            os.makedirs(model_dir, exist_ok=True)
+            
+            logging.info(f"Checking model existence at: {model_path}")
+            logging.info(f"Checking metadata existence at: {metadata_path}")
+            
+            # Check if model and metadata files exist
+            model_exists = os.path.exists(model_path)
+            metadata_exists = os.path.exists(metadata_path)
+            
+            logging.info(f"Model file exists: {model_exists}")
+            logging.info(f"Metadata file exists: {metadata_exists}")
+            
+            # Get the result from check_model_exists function
+            exists, needs_retraining, model_path = check_model_exists(stock_symbol)
+            
+            # Log detailed results
+            logging.info(f"Final check result for {stock_symbol}:")
+            logging.info(f"  Model exists: {exists}")
+            logging.info(f"  Needs retraining: {needs_retraining}")
+            logging.info(f"  Model path: {model_path}")
+            
+            return exists, needs_retraining, model_path
+            
+        except Exception as e:
+            error_msg = f"Error checking model for {stock_symbol}: {str(e)}"
+            stack_trace = traceback.format_exc()
+            logging.error(error_msg)
+            logging.error(f"Stack trace: {stack_trace}")
+            
+            # Return default values to allow the pipeline to continue
+            model_dir = "models"
+            model_path = f"{model_dir}/{stock_symbol}_model.pkl"
+            return False, True, model_path
 
     @task
     def train_model_task(check_model_result, **context):
@@ -498,6 +532,54 @@ def stock_prediction_pipeline():
             # Save the model
             logging.info(f"Saving model for {stock_symbol}...")
             save_model(model, scaler, metadata, model_path)
+            
+            # Store model evaluation metrics in database
+            logging.info(f"Storing model evaluation metrics in database...")
+            metrics = metadata['metrics']
+            training_date = metadata['last_trained']
+            
+            # Get database connection
+            pg_hook = PostgresHook(postgres_conn_id='neon_db')
+            conn = pg_hook.get_conn()
+            cursor = conn.cursor()
+            
+            # Create table if it doesn't exist
+            create_table_query = """
+            CREATE TABLE IF NOT EXISTS model_evaluations (
+                id SERIAL PRIMARY KEY,
+                stock_symbol TEXT NOT NULL,
+                training_date TIMESTAMP NOT NULL,
+                mae DOUBLE PRECISION,
+                rmse DOUBLE PRECISION,
+                r2 DOUBLE PRECISION,
+                model_path TEXT,
+                action TEXT
+            );
+            
+            CREATE INDEX IF NOT EXISTS idx_model_eval_stock ON model_evaluations(stock_symbol);
+            CREATE INDEX IF NOT EXISTS idx_model_eval_date ON model_evaluations(training_date);
+            """
+            cursor.execute(create_table_query)
+            conn.commit()
+            
+            # Insert metrics
+            insert_query = """
+            INSERT INTO model_evaluations (stock_symbol, training_date, mae, rmse, r2, model_path, action)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """
+            action = 'trained' if not exists else 'retrained'
+            cursor.execute(insert_query, (
+                stock_symbol,
+                training_date,
+                metrics['mae'],
+                metrics['rmse'],
+                metrics['r2'],
+                model_path,
+                action
+            ))
+            conn.commit()
+            cursor.close()
+            conn.close()
             
             return {
                 'stock_symbol': stock_symbol,

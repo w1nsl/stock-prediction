@@ -191,6 +191,8 @@ def insert_fred_data_manual(df: pd.DataFrame, conn_id: str) -> None:
         fed_funds_rate FLOAT,
         sp500 FLOAT
     );
+
+    CREATE INDEX IF NOT EXISTS idx_economic_date_fed_rate ON us_economic_data_daily(date, fed_funds_rate);
     """
 
     insert_query = """
