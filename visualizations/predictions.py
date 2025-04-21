@@ -534,6 +534,15 @@ def plot_performance_by_volatility(df, stock_symbol, window=20):
     # Create scatter plot
     fig = go.Figure()
     
+    # Convert dates to numerical values for colorscale
+    # First ensure date column is datetime
+    if not pd.api.types.is_datetime64_any_dtype(df['date']):
+        df['date'] = pd.to_datetime(df['date'])
+    
+    # Create numerical representation of dates for the colorscale
+    # This converts the dates to integers (days since epoch)
+    date_nums = (df['date'] - df['date'].min()).dt.total_seconds() / (24 * 60 * 60)
+    
     fig.add_trace(
         go.Scatter(
             x=df['volatility'],
@@ -541,12 +550,12 @@ def plot_performance_by_volatility(df, stock_symbol, window=20):
             mode='markers',
             marker=dict(
                 size=8,
-                color=df['date'],
+                color=date_nums,  # Use numerical date representation
                 colorscale='Viridis',
                 showscale=True,
                 colorbar=dict(title="Date")
             ),
-            text=df['date'].astype(str),
+            text=df['date'].dt.strftime('%Y-%m-%d'),  # Format dates as strings for hover
             hovertemplate='Date: %{text}<br>Volatility: %{x:.4f}<br>Prediction Error: %{y:.2f}%'
         )
     )
