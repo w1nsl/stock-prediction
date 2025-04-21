@@ -4,7 +4,13 @@ import numpy as np
 import os
 from datetime import datetime, timedelta
 import plotly.graph_objects as go
-from visualizations import (
+import plotly.express as px
+import sys
+
+# Add the parent directory to the path so we can import from visualizations
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from visualizations.predictions import (
     load_predictions,
     plot_prediction_comparison,
     plot_error_analysis,
@@ -12,8 +18,12 @@ from visualizations import (
     calculate_metrics,
     plot_accuracy_vs_horizon,
     plot_performance_by_volatility,
-    plot_feature_importance,
-    load_feature_importance
+    load_feature_importance,
+    FEATURE_DESCRIPTIONS,
+    MODEL_INTERPRETATIONS,
+    load_model_evaluations,
+    plot_model_comparison,
+    plot_performance_over_time
 )
 from dotenv import load_dotenv
 
@@ -59,8 +69,41 @@ end_date_str = end_date.strftime('%Y-%m-%d')
 @st.cache_data(ttl=3600)  # Cache data for 1 hour
 def load_cached_predictions(stock, start, end):
     try:
-        # Try to load from database (this will fail if table doesn't exist)
-        return load_predictions(stock_symbol=stock, start_date=start, end_date=end)
+        # Try to load from database
+        df = load_predictions(stock_symbol=stock, start_date=start, end_date=end)
+        
+        # If we got data back, return it
+        if not df.empty:
+            st.success(f"Successfully loaded prediction data from database")
+            return df
+            
+        # If no data was found, generate sample data
+        st.warning(f"No predictions found in database for {stock} between {start} and {end}")
+        st.info("Generating sample prediction data for demonstration")
+        
+        # Generate sample data for demonstration
+        dates = pd.date_range(start=start, end=end)
+        
+        # Create dummy prediction data
+        np.random.seed(42)  # For reproducibility
+        base_price = 150 if stock == "AAPL" else 100
+        volatility = 5 if stock == "AAPL" else 3
+        
+        # Generate sample trend with noise
+        price_trend = np.linspace(base_price, base_price * 1.3, len(dates))
+        actual_prices = price_trend + np.random.normal(0, volatility, len(dates))
+        
+        # Predictions are actual prices with added error
+        error_scale = np.linspace(volatility * 0.2, volatility * 0.6, len(dates))
+        predicted_prices = actual_prices + np.random.normal(0, error_scale, len(dates))
+        
+        # Create DataFrame
+        return pd.DataFrame({
+            'date': dates,
+            'stock_symbol': stock,
+            'actual_price': actual_prices,
+            'predicted_price': predicted_prices
+        })
     except Exception as e:
         st.warning(f"Error loading predictions from database: {e}")
         st.info("Generating sample prediction data for demonstration")
@@ -107,9 +150,10 @@ else:
     cols[4].metric("Direction Accuracy", f"{metrics['Direction Accuracy']:.2f}%")
     
     # Tabs for different visualizations
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "Price Comparison", "Error Analysis", 
-        "Error Distribution", "Advanced Analysis", "Feature Importance"
+        "Error Distribution", "Advanced Analysis", 
+        "Feature Importance", "Model Evaluation"
     ])
     
     with tab1:
@@ -226,55 +270,68 @@ else:
         # Error distribution by price range
         st.subheader("Error by Price Range")
         
-        # Create price bins
+        # Create price bins - ensure at least 2 bins to avoid ValueError
         min_price = df['actual_price'].min()
         max_price = df['actual_price'].max()
-        step = (max_price - min_price) / 5
         
+        # Make sure we have enough range to create multiple bins
+        if max_price - min_price < 0.01:
+            # Almost no range, artificially create a range
+            max_price = min_price + 10
+        
+        # Create 5 bins with proper number of labels (one fewer than bin edges)
+        num_bins = 5
+        bin_edges = np.linspace(min_price, max_price, num_bins + 1)
+        bin_labels = [f"${bin_edges[i]:.0f}-${bin_edges[i+1]:.0f}" for i in range(num_bins)]
+        
+        # Create the price_bin column
         df['price_bin'] = pd.cut(
             df['actual_price'],
-            bins=np.arange(min_price, max_price + step, step),
-            labels=[f"${min_price + i*step:.0f}-${min_price + (i+1)*step:.0f}" for i in range(5)]
+            bins=bin_edges,
+            labels=bin_labels
         )
         
-        # Calculate metrics by price bin
-        bin_metrics = df.groupby('price_bin').agg(
-            mean_error=('error', 'mean'),
-            mean_abs_error=('abs_error', 'mean'),
-            mean_pct_error=('pct_error', 'mean'),
-            count=('error', 'count')
-        ).reset_index()
-        
-        # Create horizontal bar chart for error by price range
-        fig = go.Figure()
-        
-        # Add bars for each metric
-        fig.add_trace(go.Bar(
-            y=bin_metrics['price_bin'],
-            x=bin_metrics['mean_abs_error'],
-            name='Mean Absolute Error',
-            orientation='h',
-            marker_color='orange'
-        ))
-        
-        fig.add_trace(go.Bar(
-            y=bin_metrics['price_bin'],
-            x=bin_metrics['mean_pct_error'],
-            name='Mean Percentage Error',
-            orientation='h',
-            marker_color='green',
-            visible='legendonly'  # Hide by default
-        ))
-        
-        fig.update_layout(
-            title="Prediction Error by Price Range",
-            xaxis_title="Error Value",
-            yaxis_title="Price Range",
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-            height=400
-        )
-        
-        st.plotly_chart(fig, use_container_width=True)
+        # Calculate metrics by price bin - handle case with few or no bins
+        if len(df['price_bin'].dropna().unique()) > 0:
+            bin_metrics = df.groupby('price_bin').agg(
+                mean_error=('error', 'mean'),
+                mean_abs_error=('abs_error', 'mean'),
+                mean_pct_error=('pct_error', 'mean'),
+                count=('error', 'count')
+            ).reset_index()
+            
+            # Create horizontal bar chart for error by price range
+            fig = go.Figure()
+            
+            # Add bars for each metric
+            fig.add_trace(go.Bar(
+                y=bin_metrics['price_bin'],
+                x=bin_metrics['mean_abs_error'],
+                name='Mean Absolute Error',
+                orientation='h',
+                marker_color='orange'
+            ))
+            
+            fig.add_trace(go.Bar(
+                y=bin_metrics['price_bin'],
+                x=bin_metrics['mean_pct_error'],
+                name='Mean Percentage Error',
+                orientation='h',
+                marker_color='green',
+                visible='legendonly'  # Hide by default
+            ))
+            
+            fig.update_layout(
+                title="Prediction Error by Price Range",
+                xaxis_title="Error Value",
+                yaxis_title="Price Range",
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                height=400
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.warning("Not enough price variation to create meaningful price bins.")
     
     with tab4:
         st.header("Advanced Performance Analysis")
@@ -323,94 +380,168 @@ else:
         Understanding feature importance helps identify the key drivers of stock price movements.
         """)
         
-        # Load feature importance data
-        feature_importance_data = load_feature_importance()
+        # Load feature importance data with error handling
+        try:
+            with st.spinner("Loading feature importance data..."):
+                feature_data = load_feature_importance()
+                
+            # Prepare data frames for both models
+            rf_importance = None
+            lgbm_importance = None
+            
+            # Handle both tuple format and dictionary format
+            if isinstance(feature_data, tuple) and len(feature_data) == 2:
+                # New format: tuple of DataFrames
+                rf_importance, lgbm_importance = feature_data
+            elif isinstance(feature_data, dict):
+                # Old format: dictionary with model keys
+                rf_importance = feature_data.get('random_forest')
+                lgbm_importance = feature_data.get('lightgbm')
+            else:
+                st.warning("Feature importance data is in an unexpected format.")
+            
+            # Check if we have valid data for either model
+            have_rf_data = rf_importance is not None and not (hasattr(rf_importance, 'empty') and rf_importance.empty)
+            have_lgbm_data = lgbm_importance is not None and not (hasattr(lgbm_importance, 'empty') and lgbm_importance.empty)
+            
+            if have_rf_data or have_lgbm_data:
+                # Create tabs for models that have data
+                model_tabs_list = []
+                if have_rf_data:
+                    model_tabs_list.append("Random Forest")
+                if have_lgbm_data:
+                    model_tabs_list.append("LightGBM")
+                
+                model_tabs = st.tabs(model_tabs_list)
+                
+                # Display Random Forest data if available
+                tab_index = 0
+                if have_rf_data:
+                    with model_tabs[tab_index]:
+                        st.subheader("Random Forest Feature Importance")
+                        st.write(MODEL_INTERPRETATIONS.get('random_forest', ''))
+                        
+                        # Sort and get top features
+                        rf_top = rf_importance.sort_values('importance', ascending=False).head(10)
+                        
+                        # Create bar chart
+                        fig = px.bar(rf_top, x='importance', y='feature', orientation='h',
+                                    title='Top 10 Most Important Features - Random Forest',
+                                    labels={'importance': 'Importance Score', 'feature': 'Feature'},
+                                    color='importance', color_continuous_scale='Viridis')
+                        
+                        fig.update_layout(height=500, yaxis={'categoryorder': 'total ascending'})
+                        st.plotly_chart(fig, use_container_width=True)
+                        
+                        # Display feature descriptions
+                        st.subheader("Feature Descriptions")
+                        feature_descriptions = []
+                        for feature in rf_top['feature']:
+                            description = FEATURE_DESCRIPTIONS.get(feature, "No description available")
+                            feature_descriptions.append({
+                                "Feature": feature,
+                                "Description": description
+                            })
+                        
+                        st.table(pd.DataFrame(feature_descriptions))
+                    tab_index += 1
+                
+                # Display LightGBM data if available
+                if have_lgbm_data:
+                    with model_tabs[tab_index]:
+                        st.subheader("LightGBM Feature Importance")
+                        st.write(MODEL_INTERPRETATIONS.get('lightgbm', ''))
+                        
+                        # Sort and get top features
+                        lgbm_top = lgbm_importance.sort_values('importance', ascending=False).head(10)
+                        
+                        # Create bar chart
+                        fig = px.bar(lgbm_top, x='importance', y='feature', orientation='h',
+                                    title='Top 10 Most Important Features - LightGBM',
+                                    labels={'importance': 'Importance Score', 'feature': 'Feature'},
+                                    color='importance', color_continuous_scale='Teal')
+                        
+                        fig.update_layout(height=500, yaxis={'categoryorder': 'total ascending'})
+                        st.plotly_chart(fig, use_container_width=True)
+                        
+                        # Display feature descriptions
+                        st.subheader("Feature Descriptions")
+                        feature_descriptions = []
+                        for feature in lgbm_top['feature']:
+                            description = FEATURE_DESCRIPTIONS.get(feature, "No description available")
+                            feature_descriptions.append({
+                                "Feature": feature,
+                                "Description": description
+                            })
+                        
+                        st.table(pd.DataFrame(feature_descriptions))
+            else:
+                st.warning("No feature importance data is available for any model.")
+                
+        except Exception as e:
+            st.error(f"Error loading feature importance data: {str(e)}")
+            st.warning("Using the Feature Importance visualization requires data from trained models. Please check your database connection or model training status.")
+
+    # Add the new tab for model evaluation
+    with tab6:
+        st.header("Model Evaluation Dashboard")
+        st.markdown("""
+        This tab provides insights into model performance across different stocks and over time.
+        It helps identify which models are performing best and track improvements.
+        """)
         
-        # Model selector
-        model_options = ["Random Forest", "LightGBM"]
-        selected_model = st.selectbox("Select Model", model_options)
+        # Load model evaluation data
+        with st.spinner("Loading model evaluation data..."):
+            model_eval_df = load_model_evaluations()
         
-        # Map selection to data key
-        model_key = "random_forest" if selected_model == "Random Forest" else "lightgbm"
-        
-        # Get data for selected model
-        model_data = feature_importance_data[model_key]
-        
-        if not model_data.empty:
-            # Create visualization
-            st.subheader(f"{selected_model} Feature Importance")
-            
-            # Plot top N features
-            top_n = st.slider("Number of features to display", 5, 25, 10)
-            top_features = model_data.head(top_n)
-            
-            # Create visualization
-            fig = plot_feature_importance(
-                feature_importance=top_features['importance'].values,
-                feature_names=top_features['feature'].values
-            )
-            st.plotly_chart(fig, use_container_width=True)
-            
-            # Feature descriptions for better understanding
-            st.subheader("Feature Descriptions")
-            
-            feature_descriptions = {
-                'volume': 'Trading volume (number of shares traded)',
-                'daily_sentiment': 'Overall sentiment score from news articles',
-                'article_count': 'Number of news articles published about the stock',
-                'positive_ratio': 'Percentage of positive sentiment in news articles',
-                'negative_ratio': 'Percentage of negative sentiment in news articles',
-                'neutral_ratio': 'Percentage of neutral sentiment in news articles',
-                'real_gdp': 'Real Gross Domestic Product (economic indicator)',
-                'unemployment_rate': 'Current unemployment rate percentage',
-                'cpi': 'Consumer Price Index (inflation measure)',
-                'fed_funds_rate': 'Federal Reserve interest rate',
-                'return_1d': 'Previous 1-day price return',
-                'return_3d': 'Previous 3-day price return',
-                'return_5d': 'Previous 5-day price return',
-                'ma7': '7-day moving average price',
-                'rsi': 'Relative Strength Index (momentum indicator)',
-                'volatility_7d': '7-day price volatility',
-                'volume_ma5': '5-day moving average of trading volume',
-                'volume_change': 'Daily change in trading volume',
-                'sentiment_volume': 'Sentiment weighted by article volume',
-                'sentiment_ma3': '3-day moving average of sentiment',
-                'high_news_day': 'Flag for days with high news coverage',
-                'fed_rate_increase': 'Flag for Federal Reserve rate increase',
-                'day_sin': 'Cyclical encoding of day (sine component)',
-                'day_cos': 'Cyclical encoding of day (cosine component)',
-                'month_end': 'Flag for end of month'
-            }
-            
-            # Create a filtered description table for the top features
-            top_descriptions = {
-                'Feature': list(top_features['feature']),
-                'Description': [feature_descriptions.get(feat, "No description available") 
-                               for feat in top_features['feature']]
-            }
-            
-            st.table(pd.DataFrame(top_descriptions))
-            
-            # Additional interpretation
-            st.subheader("Model Interpretation")
-            
-            # Different interpretation based on model
-            if model_key == "random_forest":
-                st.write("""
-                The Random Forest model calculates feature importance based on how much each feature 
-                reduces impurity when used in decision trees. Features with higher importance 
-                contribute more to the prediction outcome and represent stronger predictors of 
-                price movement.
-                """)
-            else:  # LightGBM
-                st.write("""
-                The LightGBM model calculates feature importance based on the gain achieved when a 
-                feature is used for splitting. Features with higher importance contribute more to 
-                prediction accuracy and represent the most influential factors in predicting 
-                stock price movements.
-                """)
+        if model_eval_df.empty:
+            st.warning("No model evaluation data available in the database.")
         else:
-            st.warning("No feature importance data available for the selected model.")
+            # Show summary metrics
+            st.subheader("Model Performance Summary")
+            
+            # Display count of models by stock
+            if 'stock_symbol' in model_eval_df.columns:
+                stock_counts = model_eval_df['stock_symbol'].value_counts()
+                st.write(f"Models for {len(stock_counts)} different stocks")
+                
+            # Display average metrics across all models    
+            if 'rmse' in model_eval_df.columns:
+                avg_rmse = model_eval_df['rmse'].mean()
+                st.metric("Average RMSE", f"{avg_rmse:.4f}")
+                
+            if 'r2' in model_eval_df.columns:
+                avg_r2 = model_eval_df['r2'].mean()
+                st.metric("Average R²", f"{avg_r2:.4f}")
+            
+            # Create sections for different visualizations
+            st.subheader("Model Comparison by Stock")
+            model_comp_fig = plot_model_comparison(model_eval_df)
+            if model_comp_fig:
+                st.plotly_chart(model_comp_fig, use_container_width=True)
+                st.info("""
+                This chart shows model performance metrics across different stocks.
+                Lower RMSE/MAE and higher R² indicate better performing models.
+                """)
+            else:
+                st.warning("Could not create model comparison visualization.")
+            
+            # Only show time series if we have training_date
+            if 'training_date' in model_eval_df.columns:
+                st.subheader("Performance Trends Over Time")
+                time_fig = plot_performance_over_time(model_eval_df)
+                if time_fig:
+                    st.plotly_chart(time_fig, use_container_width=True)
+                    st.info("""
+                    This chart shows how model performance has changed over time.
+                    It helps identify trends and improvements in model accuracy.
+                    """)
+                else:
+                    st.warning("Could not create performance over time visualization.")
+            
+            # Show raw data in expandable section
+            with st.expander("View Raw Model Evaluation Data"):
+                st.dataframe(model_eval_df)
 
 # Footer
 st.sidebar.markdown("---")

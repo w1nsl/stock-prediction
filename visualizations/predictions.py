@@ -12,143 +12,123 @@ from datetime import datetime, timedelta
 from visualizations.core import get_db_connection
 from sqlalchemy import create_engine, text
 from typing import Dict, List, Tuple, Optional, Union
+import json
 
 # Load environment variables
 load_dotenv()
 
-# Feature descriptions for feature importance visualization
+# Feature descriptions and interpretations
 FEATURE_DESCRIPTIONS = {
-    'volume': 'Trading volume for the stock',
-    'daily_sentiment': 'Average sentiment score from news articles for the day',
+    'volume': 'Trading volume (number of shares traded)',
+    'daily_sentiment': 'Overall sentiment score from news articles',
     'article_count': 'Number of news articles published about the stock',
-    'positive_ratio': 'Ratio of positive sentiment articles to total articles',
-    'negative_ratio': 'Ratio of negative sentiment articles to total articles',
-    'neutral_ratio': 'Ratio of neutral sentiment articles to total articles',
-    'real_gdp': 'Real Gross Domestic Product, a measure of economic activity',
+    'positive_ratio': 'Percentage of positive sentiment in news articles',
+    'negative_ratio': 'Percentage of negative sentiment in news articles',
+    'neutral_ratio': 'Percentage of neutral sentiment in news articles',
+    'real_gdp': 'Real Gross Domestic Product (economic indicator)',
     'unemployment_rate': 'Current unemployment rate percentage',
-    'cpi': 'Consumer Price Index, a measure of inflation',
-    'fed_funds_rate': 'Federal Reserve funds rate, a key interest rate',
-    'return_1d': 'Stock price return over the previous 1 day',
-    'return_3d': 'Stock price return over the previous 3 days',
-    'return_5d': 'Stock price return over the previous 5 days',
-    'ma7': 'Moving average of stock price over 7 days',
-    'rsi': 'Relative Strength Index, a momentum oscillator',
-    'volatility_7d': 'Standard deviation of returns over 7 days',
-    'volume_ma5': 'Moving average of volume over 5 days',
-    'volume_change': 'Percentage change in volume from previous day',
-    'sentiment_volume': 'Product of sentiment score and trading volume',
-    'sentiment_ma3': 'Moving average of sentiment over 3 days',
-    'high_news_day': 'Binary indicator for days with abnormally high news volume',
-    'fed_rate_increase': 'Binary indicator for days with Fed rate increases',
-    'day_sin': 'Sine transformation of day of week (cyclical feature)',
-    'day_cos': 'Cosine transformation of day of week (cyclical feature)',
-    'month_end': 'Binary indicator for last trading day of month'
+    'cpi': 'Consumer Price Index (inflation measure)',
+    'fed_funds_rate': 'Federal Reserve interest rate',
+    'return_1d': 'Previous 1-day price return',
+    'return_3d': 'Previous 3-day price return',
+    'return_5d': 'Previous 5-day price return',
+    'ma7': '7-day moving average price',
+    'rsi': 'Relative Strength Index (momentum indicator)',
+    'volatility_7d': '7-day price volatility',
+    'volume_ma5': '5-day moving average of trading volume',
+    'volume_change': 'Daily change in trading volume',
+    'sentiment_volume': 'Sentiment weighted by article volume',
+    'sentiment_ma3': '3-day moving average of sentiment',
+    'high_news_day': 'Flag for days with high news coverage',
+    'fed_rate_increase': 'Flag for Federal Reserve rate increase',
+    'day_sin': 'Cyclical encoding of day (sine component)',
+    'day_cos': 'Cyclical encoding of day (cosine component)',
+    'month_end': 'Flag for end of month',
+    'inflation_rate': 'Annual percentage change in consumer price index',
+    'interest_rate': 'Central bank benchmark interest rate',
+    'gdp_growth_rate': 'Quarterly change in gross domestic product',
+    'moving_avg_5': '5-day moving average of closing prices',
+    'moving_avg_10': '10-day moving average of closing prices',
+    'moving_avg_20': '20-day moving average of closing prices',
+    'moving_avg_50': '50-day moving average of closing prices',
+    'moving_avg_200': '200-day moving average of closing prices',
+    'rsi_14': 'Relative Strength Index (14-day) measuring momentum',
+    'macd': 'Moving Average Convergence Divergence indicator',
+    'bollinger_upper': 'Upper Bollinger Band (20-day, 2 standard deviations)',
+    'bollinger_lower': 'Lower Bollinger Band (20-day, 2 standard deviations)',
+    'vix': 'Market volatility index representing expected market volatility',
+    'atr': 'Average True Range measuring volatility',
+    'obv': 'On-Balance Volume indicator relating volume to price change',
+    'adx': 'Average Directional Index measuring trend strength',
+    'cci': 'Commodity Channel Index measuring cyclical trends',
+    'stochastic_k': 'Stochastic Oscillator %K measuring momentum',
+    'stochastic_d': 'Stochastic Oscillator %D (3-day SMA of %K)',
+    'williams_r': 'Williams %R momentum indicator showing overbought/oversold levels',
+    'price_earnings': 'Price to Earnings ratio',
+    'market_cap': 'Total market value of a company\'s outstanding shares',
+    'dividend_yield': 'Annual dividend payment as percentage of stock price',
+    'book_value': 'Company\'s assets minus its liabilities',
+    'cash_flow': 'Net amount of cash generated by business operations',
+    'revenue_growth': 'Year-over-year percentage change in company revenue',
+    'profit_margin': 'Percentage of revenue that exceeds costs'
 }
 
-# Model-specific interpretations
 MODEL_INTERPRETATIONS = {
     'random_forest': """
-    Random Forest measures feature importance based on how much each feature decreases impurity across all trees in the forest.
-    Higher values indicate features that are more useful for making accurate predictions.
+    The Random Forest model calculates feature importance based on how much each feature 
+    reduces impurity when used in decision trees. Features with higher importance 
+    contribute more to the prediction outcome and represent stronger predictors of 
+    price movement.
     """,
-    
     'lightgbm': """
-    LightGBM calculates feature importance based on the number of times a feature is used to split the data across all trees.
-    Features with higher importance scores are used more frequently in the model's decision process.
+    The LightGBM model calculates feature importance based on the gain achieved when a 
+    feature is used for splitting. Features with higher importance contribute more to 
+    prediction accuracy and represent the most influential factors in predicting 
+    stock price movements.
     """
 }
 
 def load_predictions(stock_symbol, start_date=None, end_date=None):
     """
-    Load prediction data from database
+    Load stock price predictions from database
     
-    Note: This assumes you have a predictions table in your database.
-    You may need to modify this function based on your actual database schema.
+    Args:
+        stock_symbol: Stock ticker symbol
+        start_date: Start date in 'YYYY-MM-DD' format
+        end_date: End date in 'YYYY-MM-DD' format
+        
+    Returns:
+        DataFrame with date, stock_symbol, predicted_price, and actual_price columns
     """
     try:
         conn = get_db_connection()
         
+        # Adjusted query to use 'prediction' column instead of 'predicted_price'
         query = """
-        SELECT p.date, p.stock_symbol, p.predicted_price, m.close_price as actual_price
+        SELECT p.date, p.stock_symbol, p.prediction as predicted_price, m.close_price as actual_price
         FROM stock_predictions p
         JOIN merged_stocks_new m 
             ON p.date = m.date AND p.stock_symbol = m.stock_symbol
         WHERE p.stock_symbol = %s
+         AND p.date >= %s AND p.date <= %s ORDER BY p.date
         """
-        params = [stock_symbol]
         
-        if start_date:
-            query += " AND p.date >= %s"
-            params.append(start_date)
+        params = [stock_symbol, start_date, end_date]
         
-        if end_date:
-            query += " AND p.date <= %s"
-            params.append(end_date)
-        
-        query += " ORDER BY p.date"
-        
+        # Load predictions
         df = pd.read_sql_query(query, conn, params=params)
         conn.close()
         
         if df.empty:
-            raise Exception("No prediction data found for this stock and date range")
-            
-        df.attrs['data_source'] = 'database'
-        return df
+            print(f"No predictions found for {stock_symbol} between {start_date} and {end_date}")
+            return pd.DataFrame()
         
+        print(f"Successfully loaded {len(df)} predictions for {stock_symbol}")
+        return df
+    
     except Exception as e:
         print(f"Error loading prediction data: {e}")
-        print("Generating sample prediction data for demonstration")
-        
-        # Generate sample data for demonstration
-        if start_date is None:
-            start_date = '2023-01-01'
-        if end_date is None:
-            end_date = datetime.now().strftime('%Y-%m-%d')
-            
-        # Create date range
-        dates = pd.date_range(start=start_date, end=end_date)
-        
-        # Create dummy prediction data
-        np.random.seed(42)  # For reproducibility
-        
-        # Set base price based on stock
-        if stock_symbol == 'AAPL':
-            base_price = 150
-            volatility = 5
-        elif stock_symbol == 'MSFT':
-            base_price = 300
-            volatility = 8
-        elif stock_symbol == 'GOOG':
-            base_price = 130
-            volatility = 6
-        elif stock_symbol == 'AMZN':
-            base_price = 120
-            volatility = 7
-        else:
-            base_price = 200
-            volatility = 10
-            
-        # Generate sample trend with noise
-        price_trend = np.linspace(base_price, base_price * 1.3, len(dates))
-        actual_prices = price_trend + np.random.normal(0, volatility, len(dates))
-        
-        # Predictions are actual prices with added error (more error for further dates)
-        error_scale = np.linspace(volatility * 0.2, volatility * 0.6, len(dates))
-        predicted_prices = actual_prices + np.random.normal(0, error_scale, len(dates))
-        
-        # Create DataFrame
-        df = pd.DataFrame({
-            'date': dates,
-            'stock_symbol': stock_symbol,
-            'actual_price': actual_prices,
-            'predicted_price': predicted_prices
-        })
-        
-        # Mark as sample data
-        df.attrs['data_source'] = 'sample'
-        
-        return df
+        return pd.DataFrame()
 
 def plot_prediction_comparison(df, stock_symbol, window_size=10):
     """
@@ -227,9 +207,9 @@ def plot_error_analysis(df, stock_symbol):
         shared_xaxes=True,
         vertical_spacing=0.1,
         subplot_titles=(
-            "Prediction Error Over Time",
+            "Raw Prediction Error Over Time (Actual - Predicted)",
             "Absolute Error Over Time",
-            "Percentage Error Over Time"
+            "Percentage Error Over Time (%)"
         ),
         row_heights=[0.33, 0.33, 0.33]
     )
@@ -284,12 +264,47 @@ def plot_error_analysis(df, stock_symbol):
         row=3, col=1
     )
     
+    # Calculate y-axis ranges with padding
+    error_max = max(abs(df['error'].max()), abs(df['error'].min())) * 1.1
+    abs_error_max = df['abs_error'].max() * 1.1
+    pct_error_max = df['pct_error'].max() * 1.1
+    
+    # Set y-axis ranges
+    fig.update_yaxes(range=[-error_max, error_max], title_text="Price Units", row=1, col=1)
+    fig.update_yaxes(range=[0, abs_error_max], title_text="Price Units", row=2, col=1)
+    fig.update_yaxes(range=[0, pct_error_max], title_text="Percent (%)", row=3, col=1)
+    
     # Update layout
     fig.update_layout(
         title=f"{stock_symbol} - Prediction Error Analysis",
         height=900,
-        showlegend=False
+        showlegend=False,
+        xaxis3_title="Date"
     )
+    
+    # Add mean error lines and annotations
+    mean_error = df['error'].mean()
+    mean_abs_error = df['abs_error'].mean()
+    mean_pct_error = df['pct_error'].mean()
+    
+    # Add mean lines
+    fig.add_shape(type="line", x0=df['date'].min(), x1=df['date'].max(), 
+                 y0=mean_error, y1=mean_error, line=dict(color="red", width=1, dash="dot"),
+                 row=1, col=1)
+    fig.add_annotation(x=df['date'].max(), y=mean_error, text=f"Mean: {mean_error:.2f}", 
+                      showarrow=False, xanchor="right", row=1, col=1)
+    
+    fig.add_shape(type="line", x0=df['date'].min(), x1=df['date'].max(), 
+                 y0=mean_abs_error, y1=mean_abs_error, line=dict(color="red", width=1, dash="dot"),
+                 row=2, col=1)
+    fig.add_annotation(x=df['date'].max(), y=mean_abs_error, text=f"Mean: {mean_abs_error:.2f}", 
+                      showarrow=False, xanchor="right", row=2, col=1)
+    
+    fig.add_shape(type="line", x0=df['date'].min(), x1=df['date'].max(), 
+                 y0=mean_pct_error, y1=mean_pct_error, line=dict(color="red", width=1, dash="dot"),
+                 row=3, col=1)
+    fig.add_annotation(x=df['date'].max(), y=mean_pct_error, text=f"Mean: {mean_pct_error:.2f}%", 
+                      showarrow=False, xanchor="right", row=3, col=1)
     
     return fig
 
@@ -498,6 +513,24 @@ def plot_performance_by_volatility(df, stock_symbol, window=20):
     # Remove NaN values
     df = df.dropna()
     
+    # Check if we have enough data after preprocessing
+    if len(df) < 2:
+        # Create an empty figure with a message
+        fig = go.Figure()
+        fig.add_annotation(
+            x=0.5, y=0.5,
+            text="Not enough data points to analyze volatility relationship",
+            showarrow=False,
+            font=dict(size=16)
+        )
+        fig.update_layout(
+            title=f"{stock_symbol} - Prediction Error vs Volatility (Insufficient Data)",
+            xaxis_title="Volatility (Annualized)",
+            yaxis_title="Percentage Error (%)",
+            height=600
+        )
+        return fig
+    
     # Create scatter plot
     fig = go.Figure()
     
@@ -534,12 +567,16 @@ def plot_performance_by_volatility(df, stock_symbol, window=20):
         )
     )
     
+    # Set y-axis range with some padding
+    max_error = df['pct_error'].max() * 1.1
+    
     # Update layout
     fig.update_layout(
         title=f"{stock_symbol} - Prediction Error vs Volatility (Correlation: {correlation:.4f})",
         xaxis_title="Volatility (Annualized)",
         yaxis_title="Percentage Error (%)",
-        height=600
+        height=600,
+        yaxis=dict(range=[0, max_error])
     )
     
     return fig
@@ -551,59 +588,350 @@ def sample_predictions_to_csv(df, output_path):
 
 def load_feature_importance():
     """
-    Load feature importance data from ML models
+    Load feature importance data for Random Forest and LightGBM models
     
     Returns:
-        dict: Dictionary containing feature importance data for different models
+        Tuple of DataFrames containing feature importance for RF and LightGBM
     """
     try:
-        # Define feature names based on the models in ml_notebook2.ipynb
-        feature_cols = [
-            'volume', 'daily_sentiment', 'article_count', 'positive_ratio', 
-            'negative_ratio', 'neutral_ratio', 'real_gdp', 'unemployment_rate', 
-            'cpi', 'fed_funds_rate', 'return_1d', 'return_3d', 'return_5d', 
-            'ma7', 'rsi', 'volatility_7d', 'volume_ma5', 'volume_change', 
-            'sentiment_volume', 'sentiment_ma3', 'high_news_day', 
-            'fed_rate_increase', 'day_sin', 'day_cos', 'month_end'
-        ]
+        conn = get_db_connection()
         
-        # Example feature importance values for Random Forest
-        # These would ideally come from your saved model or database
-        rf_importance = [
-            0.142, 0.093, 0.078, 0.072, 0.068, 0.062, 0.058, 0.056, 
-            0.052, 0.048, 0.042, 0.039, 0.038, 0.032, 0.029, 0.025, 
-            0.023, 0.021, 0.019, 0.018, 0.015, 0.014, 0.012, 0.010, 0.004
-        ]
+        # Query for Random Forest feature importance
+        rf_query = """
+        SELECT feature, importance
+        FROM model_feature_importance
+        WHERE model_name = 'random_forest'
+        ORDER BY importance DESC
+        """
         
-        # Example feature importance values for LightGBM
-        lgb_importance = [
-            0.128, 0.112, 0.091, 0.081, 0.072, 0.064, 0.052, 0.049, 
-            0.047, 0.043, 0.039, 0.037, 0.035, 0.032, 0.029, 0.026, 
-            0.021, 0.018, 0.017, 0.015, 0.014, 0.012, 0.011, 0.009, 0.006
-        ]
+        # Query for LightGBM feature importance
+        lgbm_query = """
+        SELECT feature, importance
+        FROM model_feature_importance
+        WHERE model_name = 'lightgbm'
+        ORDER BY importance DESC
+        """
         
-        # Create sorted dataframes for each model
-        rf_df = pd.DataFrame({
-            'feature': feature_cols,
-            'importance': rf_importance
-        }).sort_values('importance', ascending=False)
+        rf_importance = pd.read_sql(rf_query, conn)
+        lgbm_importance = pd.read_sql(lgbm_query, conn)
         
-        lgb_df = pd.DataFrame({
-            'feature': feature_cols,
-            'importance': lgb_importance
-        }).sort_values('importance', ascending=False)
+        conn.close()
         
-        return {
-            'random_forest': rf_df,
-            'lightgbm': lgb_df
-        }
+        return rf_importance, lgbm_importance
+    
     except Exception as e:
         print(f"Error loading feature importance data: {e}")
-        # Return empty dataframes if there's an error
-        return {
-            'random_forest': pd.DataFrame(columns=['feature', 'importance']),
-            'lightgbm': pd.DataFrame(columns=['feature', 'importance'])
-        }
+        
+        # Generate sample feature importance data if database query fails
+        features = list(FEATURE_DESCRIPTIONS.keys())[:20]  # Use top 20 features
+        
+        # Random Forest sample data
+        rf_importance = pd.DataFrame({
+            'feature': features,
+            'importance': np.random.uniform(0.01, 0.25, size=len(features))
+        })
+        rf_importance['importance'] = rf_importance['importance'] / rf_importance['importance'].sum()
+        
+        # LightGBM sample data 
+        lgbm_importance = pd.DataFrame({
+            'feature': features,
+            'importance': np.random.uniform(0.01, 0.3, size=len(features))
+        })
+        lgbm_importance['importance'] = lgbm_importance['importance'] / lgbm_importance['importance'].sum()
+        
+        return rf_importance, lgbm_importance
+
+def load_model_evaluations():
+    """
+    Load model evaluation data from the database
+    
+    Returns:
+        DataFrame containing model evaluation metrics
+    """
+    try:
+        # Connect to database
+        conn = get_db_connection()
+        
+        # Query to get model evaluations
+        query = """
+        SELECT * FROM model_evaluations
+        ORDER BY training_date DESC
+        """
+        
+        # Load data
+        df = pd.read_sql_query(query, conn, params=[])
+        conn.close()
+        
+        if not df.empty:
+            print(f"Successfully loaded {len(df)} model evaluations from database")
+            return df
+        else:
+            print("No model evaluation data found in database")
+            return pd.DataFrame()
+            
+    except Exception as e:
+        print(f"Error loading model evaluation data: {e}")
+        return pd.DataFrame()
+
+def plot_model_comparison(df):
+    """
+    Create a visualization comparing model performance across different stocks
+    
+    Args:
+        df: DataFrame containing model evaluation data
+    """
+    if df.empty:
+        return None
+        
+    # Prepare data for visualization
+    # Extract model name and stock symbol from model path if available
+    if 'model_path' in df.columns:
+        try:
+            # Extract stock symbol from model path (assumed format: models/SYMBOL_model.pkl)
+            df['stock_symbol'] = df['model_path'].str.extract(r'models/([A-Z]+)_model\.pkl')
+        except:
+            # If extraction fails, try to use existing stock_symbol column if it exists
+            if 'stock_symbol' not in df.columns:
+                df['stock_symbol'] = 'Unknown'
+    
+    # Select metrics to visualize
+    error_metrics = []
+    if 'rmse' in df.columns:
+        error_metrics.append('rmse')
+    if 'mae' in df.columns:
+        error_metrics.append('mae')
+        
+    accuracy_metrics = []
+    if 'r2' in df.columns:
+        accuracy_metrics.append('r2')
+    
+    all_metrics = error_metrics + accuracy_metrics
+    if not all_metrics:
+        return None
+    
+    # Create a figure with sufficient subplots for all metrics
+    fig = make_subplots(
+        rows=len(all_metrics), 
+        cols=1,
+        subplot_titles=[f"{metric.upper()} by Stock" for metric in all_metrics],
+        vertical_spacing=0.1
+    )
+    
+    # Process each group of metrics
+    row_idx = 1
+    
+    # First add error metrics (lower is better)
+    for metric in error_metrics:
+        # Sort by metric (ascending for error metrics)
+        sorted_df = df.sort_values(metric, ascending=True)
+        
+        # Get values
+        symbols = sorted_df['stock_symbol'].values
+        values = sorted_df[metric].values
+        
+        # Add bar chart
+        fig.add_trace(
+            go.Bar(
+                x=symbols,
+                y=values,
+                name=metric.upper(),
+                marker_color='red',
+                text=[f"{v:.4f}" for v in values],
+                textposition='auto'
+            ),
+            row=row_idx, col=1
+        )
+        
+        # Add a horizontal line for the average
+        avg_value = np.mean(values)
+        fig.add_shape(
+            type='line',
+            x0=-0.5,
+            x1=len(symbols) - 0.5,
+            y0=avg_value,
+            y1=avg_value,
+            line=dict(color='black', dash='dash'),
+            row=row_idx, col=1
+        )
+        
+        # Add text for average
+        fig.add_annotation(
+            x=len(symbols) - 1,
+            y=avg_value,
+            text=f"Avg: {avg_value:.4f}",
+            showarrow=False,
+            row=row_idx, col=1
+        )
+        
+        # Add explicit label to indicate that lower is better
+        fig.add_annotation(
+            x=0,
+            y=max(values) * 0.95,
+            text="Lower is better",
+            showarrow=False,
+            xanchor="left",
+            font=dict(color="red", size=12),
+            row=row_idx, col=1
+        )
+        
+        # Update y-axis label
+        fig.update_yaxes(title_text=f"{metric.upper()} (Error)", row=row_idx, col=1)
+        
+        row_idx += 1
+    
+    # Then add accuracy metrics (higher is better)
+    for metric in accuracy_metrics:
+        # Sort by metric (descending for accuracy metrics)
+        sorted_df = df.sort_values(metric, ascending=False)
+        
+        # Get values
+        symbols = sorted_df['stock_symbol'].values
+        values = sorted_df[metric].values
+        
+        # Add bar chart
+        fig.add_trace(
+            go.Bar(
+                x=symbols,
+                y=values,
+                name=metric.upper(),
+                marker_color='blue',
+                text=[f"{v:.4f}" for v in values],
+                textposition='auto'
+            ),
+            row=row_idx, col=1
+        )
+        
+        # Add a horizontal line for the average
+        avg_value = np.mean(values)
+        fig.add_shape(
+            type='line',
+            x0=-0.5,
+            x1=len(symbols) - 0.5,
+            y0=avg_value,
+            y1=avg_value,
+            line=dict(color='black', dash='dash'),
+            row=row_idx, col=1
+        )
+        
+        # Add text for average
+        fig.add_annotation(
+            x=len(symbols) - 1,
+            y=avg_value,
+            text=f"Avg: {avg_value:.4f}",
+            showarrow=False,
+            row=row_idx, col=1
+        )
+        
+        # Add explicit label to indicate that higher is better
+        fig.add_annotation(
+            x=0,
+            y=max(values) * 0.95,
+            text="Higher is better",
+            showarrow=False,
+            xanchor="left",
+            font=dict(color="blue", size=12),
+            row=row_idx, col=1
+        )
+        
+        # Update y-axis label
+        fig.update_yaxes(title_text=f"{metric.upper()} (Accuracy)", row=row_idx, col=1)
+        
+        row_idx += 1
+    
+    # Update x-axis label for the last plot
+    fig.update_xaxes(title_text="Stock Symbol", row=len(all_metrics), col=1)
+    
+    # Update layout
+    fig.update_layout(
+        title="Model Performance Comparison by Stock",
+        height=300 * len(all_metrics),
+        showlegend=False
+    )
+    
+    return fig
+
+def plot_performance_over_time(df):
+    """
+    Create a visualization showing model performance over time
+    
+    Args:
+        df: DataFrame containing model evaluation data with training_date column
+    """
+    if df.empty or 'training_date' not in df.columns:
+        return None
+    
+    # Convert training_date to datetime if not already
+    if not pd.api.types.is_datetime64_any_dtype(df['training_date']):
+        df['training_date'] = pd.to_datetime(df['training_date'])
+    
+    # Sort by training date
+    df = df.sort_values('training_date')
+    
+    # Select metrics to visualize
+    metrics = []
+    if 'rmse' in df.columns:
+        metrics.append('rmse')
+    if 'mae' in df.columns:
+        metrics.append('mae')
+    if 'r2' in df.columns:
+        metrics.append('r2')
+    
+    if not metrics:
+        return None
+    
+    # Extract stock symbol from model path if available
+    if 'model_path' in df.columns and 'stock_symbol' not in df.columns:
+        try:
+            df['stock_symbol'] = df['model_path'].str.extract(r'models/([A-Z]+)_model\.pkl')
+        except:
+            df['stock_symbol'] = 'Unknown'
+    
+    # Create figure
+    fig = go.Figure()
+    
+    # Get unique stocks
+    stocks = df['stock_symbol'].unique() if 'stock_symbol' in df.columns else ['Unknown']
+    
+    # Create a color map for stocks
+    colors = px.colors.qualitative.Plotly[:len(stocks)]
+    color_map = {stock: color for stock, color in zip(stocks, colors)}
+    
+    # Add traces for each metric and stock
+    for metric in metrics:
+        for stock in stocks:
+            # Filter for this stock
+            stock_df = df[df['stock_symbol'] == stock] if 'stock_symbol' in df.columns else df
+            
+            # Add trace
+            fig.add_trace(
+                go.Scatter(
+                    x=stock_df['training_date'],
+                    y=stock_df[metric],
+                    mode='lines+markers',
+                    name=f"{stock} - {metric.upper()}",
+                    line=dict(
+                        color=color_map.get(stock, 'blue') if metric == 'r2' else 'red',
+                        dash='solid' if metric == 'r2' else 'dash'
+                    )
+                )
+            )
+    
+    # Update layout
+    fig.update_layout(
+        title="Model Performance Trends Over Time",
+        xaxis_title="Training Date",
+        yaxis_title="Metric Value",
+        height=600,
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1
+        )
+    )
+    
+    return fig
 
 if __name__ == "__main__":
     # Example usage

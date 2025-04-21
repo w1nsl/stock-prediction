@@ -25,7 +25,12 @@ from visualizations.predictions import (
     plot_accuracy_vs_horizon,
     plot_performance_by_volatility,
     sample_predictions_to_csv,
-    load_feature_importance
+    load_feature_importance,
+    load_model_evaluations,
+    plot_model_comparison,
+    plot_performance_over_time,
+    FEATURE_DESCRIPTIONS,
+    MODEL_INTERPRETATIONS
 )
 
 __all__ = [
@@ -34,6 +39,7 @@ __all__ = [
     'load_data_from_db',
     'load_predictions',
     'load_feature_importance',
+    'load_model_evaluations',
     
     # Core visualizations
     'plot_stock_candlestick',
@@ -50,5 +56,11 @@ __all__ = [
     'calculate_metrics',
     'plot_accuracy_vs_horizon',
     'plot_performance_by_volatility',
-    'sample_predictions_to_csv'
+    'sample_predictions_to_csv',
+    'plot_model_comparison',
+    'plot_performance_over_time',
+    
+    # Feature descriptions and model interpretations
+    'FEATURE_DESCRIPTIONS',
+    'MODEL_INTERPRETATIONS'
 ] 
