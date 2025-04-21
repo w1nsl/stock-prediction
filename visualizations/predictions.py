@@ -630,25 +630,7 @@ def load_feature_importance():
     
     except Exception as e:
         print(f"Error loading feature importance data: {e}")
-        
-        # Generate sample feature importance data if database query fails
-        features = list(FEATURE_DESCRIPTIONS.keys())[:20]  # Use top 20 features
-        
-        # Random Forest sample data
-        rf_importance = pd.DataFrame({
-            'feature': features,
-            'importance': np.random.uniform(0.01, 0.25, size=len(features))
-        })
-        rf_importance['importance'] = rf_importance['importance'] / rf_importance['importance'].sum()
-        
-        # LightGBM sample data 
-        lgbm_importance = pd.DataFrame({
-            'feature': features,
-            'importance': np.random.uniform(0.01, 0.3, size=len(features))
-        })
-        lgbm_importance['importance'] = lgbm_importance['importance'] / lgbm_importance['importance'].sum()
-        
-        return rf_importance, lgbm_importance
+        return pd.DataFrame(), pd.DataFrame()
 
 def load_model_evaluations():
     """

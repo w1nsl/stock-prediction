@@ -37,6 +37,9 @@ st.set_page_config(
     layout="wide"
 )
 
+# Get URL parameters
+params = st.query_params
+
 # Title and description
 st.title("Stock Prediction Performance Dashboard")
 st.markdown("""
@@ -47,16 +50,31 @@ error analysis, and model performance metrics.
 # Sidebar filters
 st.sidebar.header("Filters")
 
-# Stock selection
-default_stocks = ["AAPL", "GOOG", "MSFT", "AMZN", "META"]
+# Stock selection with URL parameter support
+default_stocks_str = params.get("stock_symbols", ["GOOG,AMD,COST,PYPL,QCOM,ABDE,PEP,CMCSA,INTC,SBUX"])[0]
+default_stocks = [s.strip() for s in default_stocks_str.split(",")]
+
 all_stocks = st.sidebar.text_input("Enter stock symbols (comma-separated)", ",".join(default_stocks))
 all_stocks = [s.strip().upper() for s in all_stocks.split(",") if s.strip()]
-selected_stock = st.sidebar.selectbox("Select Stock", all_stocks)
 
-# Date range selection
+# Default selected stock from URL params
+default_selected_stock = params.get("selected_stock", [default_stocks[0] if default_stocks else "GOOG"])[0]
+selected_stock = st.sidebar.selectbox("Select Stock", all_stocks, index=all_stocks.index(default_selected_stock) if default_selected_stock in all_stocks else 0)
+
+# Date range selection with URL parameter support
 today = datetime.now()
-default_start = today - timedelta(days=365)  # 1 year ago
-default_end = today
+default_start = datetime.strptime("2023/06/16", "%Y/%m/%d").date()
+default_end = datetime.strptime("2025/04/21", "%Y/%m/%d").date()
+
+# Get date parameters from URL if provided
+try:
+    if "start_date" in params:
+        default_start = datetime.strptime(params["start_date"][0], "%Y-%m-%d").date()
+    if "end_date" in params:
+        default_end = datetime.strptime(params["end_date"][0], "%Y-%m-%d").date()
+except ValueError:
+    # Fallback to defaults if dates are invalid
+    pass
 
 start_date = st.sidebar.date_input("Start Date", default_start)
 end_date = st.sidebar.date_input("End Date", default_end)
@@ -64,6 +82,18 @@ end_date = st.sidebar.date_input("End Date", default_end)
 # Convert to string format for database query
 start_date_str = start_date.strftime('%Y-%m-%d')
 end_date_str = end_date.strftime('%Y-%m-%d')
+
+# Update URL parameters
+def update_url_params():
+    st.query_params.update(
+        stock_symbols=",".join(all_stocks),
+        selected_stock=selected_stock,
+        start_date=start_date_str,
+        end_date=end_date_str
+    )
+
+# Uncomment to update URL when filters change - note this can cause refreshes
+# update_url_params()
 
 # Load data caching
 @st.cache_data(ttl=3600)  # Cache data for 1 hour
@@ -77,55 +107,14 @@ def load_cached_predictions(stock, start, end):
             st.success(f"Successfully loaded prediction data from database")
             return df
             
-        # If no data was found, generate sample data
-        st.warning(f"No predictions found in database for {stock} between {start} and {end}")
-        st.info("Generating sample prediction data for demonstration")
-        
-        # Generate sample data for demonstration
-        dates = pd.date_range(start=start, end=end)
-        
-        # Create dummy prediction data
-        np.random.seed(42)  # For reproducibility
-        base_price = 150 if stock == "AAPL" else 100
-        volatility = 5 if stock == "AAPL" else 3
-        
-        # Generate sample trend with noise
-        price_trend = np.linspace(base_price, base_price * 1.3, len(dates))
-        actual_prices = price_trend + np.random.normal(0, volatility, len(dates))
-        
-        # Predictions are actual prices with added error
-        error_scale = np.linspace(volatility * 0.2, volatility * 0.6, len(dates))
-        predicted_prices = actual_prices + np.random.normal(0, error_scale, len(dates))
-        
-        # Create DataFrame
-        return pd.DataFrame({
-            'date': dates,
-            'stock_symbol': stock,
-            'actual_price': actual_prices,
-            'predicted_price': predicted_prices
-        })
+        # If no data was found, return empty DataFrame
+        st.error(f"No predictions found in database for {stock} between {start} and {end}")
+        st.info("Please check your database connection or try a different stock/date range.")
+        return pd.DataFrame()
     except Exception as e:
-        st.warning(f"Error loading predictions from database: {e}")
-        st.info("Generating sample prediction data for demonstration")
-        
-        # Generate sample data for demonstration
-        dates = pd.date_range(start=start, end=end)
-        
-        # Create dummy prediction data
-        np.random.seed(42)  # For reproducibility
-        base_price = 150 if stock == "AAPL" else 100
-        volatility = 5 if stock == "AAPL" else 3
-        
-        actual_prices = np.linspace(base_price, base_price * 1.3, len(dates)) + np.random.normal(0, volatility, len(dates))
-        predicted_prices = actual_prices + np.random.normal(0, volatility * 2, len(dates))
-        
-        # Create DataFrame
-        return pd.DataFrame({
-            'date': dates,
-            'stock_symbol': stock,
-            'actual_price': actual_prices,
-            'predicted_price': predicted_prices
-        })
+        st.error(f"Error loading predictions from database: {e}")
+        st.info("Please check your database connection and credentials.")
+        return pd.DataFrame()
 
 with st.spinner("Loading prediction data..."):
     df = load_cached_predictions(selected_stock, start_date_str, end_date_str)
@@ -547,7 +536,7 @@ else:
 st.sidebar.markdown("---")
 st.sidebar.info("""
 This dashboard analyzes prediction performance using various metrics and visualizations.
-For demonstration purposes, sample data is generated if no prediction data is available in the database.
+All data is loaded directly from the database with no sample data generation.
 """)
 
 # Run the app with: streamlit run visualizations/prediction_dashboard.py 
