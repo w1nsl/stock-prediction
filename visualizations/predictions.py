@@ -647,7 +647,15 @@ def plot_performance_by_volatility(df, stock_symbol, window=20):
                 color=date_nums,  # Use numerical date representation
                 colorscale='Viridis',
                 showscale=True,
-                colorbar=dict(title="Date")
+                colorbar=dict(
+                    title="Date",
+                    thickness=15,  # Make it thinner
+                    yanchor="top",
+                    y=1,
+                    xanchor="left",
+                    x=1.05,        # Position it to the right of the plot
+                    outlinewidth=0
+                )
             ),
             text=df['date'].dt.strftime('%Y-%m-%d'),  # Format dates as strings for hover
             hovertemplate='Date: %{text}<br>Volatility: %{x:.4f}<br>Prediction Error: %{y:.2f}%'
@@ -679,7 +687,15 @@ def plot_performance_by_volatility(df, stock_symbol, window=20):
         xaxis_title="Volatility (Annualized)",
         yaxis_title="Percentage Error (%)",
         height=600,
-        yaxis=dict(range=[0, max_error])
+        yaxis=dict(range=[0, max_error]),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1
+        ),
+        margin=dict(r=150)  # Increase right margin for colorbar
     )
     
     return fig
@@ -983,37 +999,69 @@ def plot_performance_over_time(df):
     
     # Add traces for each metric and stock
     for metric in metrics:
+        dash_style = 'dash' if metric in ['rmse', 'mae'] else 'solid'
+        line_width = 2 if metric == 'r2' else 1.5
+        
         for stock in stocks:
             # Filter for this stock
             stock_df = df[df['stock_symbol'] == stock] if 'stock_symbol' in df.columns else df
             
-            # Add trace
+            # Set color based on stock
+            color = color_map.get(stock, 'blue')
+            
+            # Add trace with improved styling
             fig.add_trace(
                 go.Scatter(
                     x=stock_df['training_date'],
                     y=stock_df[metric],
                     mode='lines+markers',
                     name=f"{stock} - {metric.upper()}",
+                    legendgroup=stock,  # Group by stock in legend
+                    marker=dict(size=6),
                     line=dict(
-                        color=color_map.get(stock, 'blue') if metric == 'r2' else 'red',
-                        dash='solid' if metric == 'r2' else 'dash'
+                        color=color,
+                        dash=dash_style,
+                        width=line_width
                     )
                 )
             )
     
     # Update layout
     fig.update_layout(
-        title="Model Performance Trends Over Time",
+        title={
+            "text": "Model Performance Trends Over Time",
+            "y": 0.95,  # Move title up to make more space
+            "x": 0.5,
+            "xanchor": "center",
+            "yanchor": "top"
+        },
         xaxis_title="Training Date",
         yaxis_title="Metric Value",
-        height=600,
+        height=750,  # Increase height for better spacing
+        margin=dict(t=180, r=20, l=20, b=50),  # Add more margin all around
         legend=dict(
-            orientation="h",
+            orientation="h",  
             yanchor="bottom",
-            y=1.02,
-            xanchor="right",
-            x=1
-        )
+            y=1.05,  # Position legend higher above the plot
+            xanchor="center",  # Center the legend
+            x=0.5,
+            font=dict(size=10),  # Smaller font for legend text
+            itemsizing="constant",  # Make legend items same size
+            tracegroupgap=10  # Add gap between legend groups
+        ),
+        # Add annotations to explain chart elements
+        annotations=[
+            dict(
+                x=0.01,
+                y=1.03,
+                xref="paper",
+                yref="paper",
+                text="<b>Chart Guide:</b> Solid lines = R² (higher is better), Dashed lines = RMSE/MAE (lower is better)",
+                showarrow=False,
+                font=dict(size=11),
+                align="left"
+            )
+        ]
     )
     
     return fig

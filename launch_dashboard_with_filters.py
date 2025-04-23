@@ -3,7 +3,7 @@ import urllib.parse
 
 # Define the parameters you want to prefill
 params = {
-    "stock_symbols": "GOOG,AMD,COST,PYPL,QCOM,ABDE,PEP,CMCSA,INTC,SBUX",
+    "stock_symbols": "GOOG,AMD,COST,PYPL,QCOM,ADBE,PEP,CMCSA,INTC,SBUX",
     "selected_stock": "GOOG",
     "start_date": "2023-06-16",
     "end_date": "2023-12-31"

@@ -97,18 +97,21 @@ else:
         col1, col2, col3, col4 = st.columns(4)
         
         # Calculate statistics
-        latest_price = df['close_price'].iloc[-1]
-        price_change = latest_price - df['close_price'].iloc[-2]
-        percent_change = (price_change / df['close_price'].iloc[-2]) * 100
-        
-        highest_price = df['high_price'].max()
-        lowest_price = df['low_price'].min()
-        avg_volume = df['volume'].mean()
-        
-        col1.metric("Latest Price", f"${latest_price:.2f}", f"{percent_change:.2f}%")
-        col2.metric("Highest Price", f"${highest_price:.2f}")
-        col3.metric("Lowest Price", f"${lowest_price:.2f}")
-        col4.metric("Avg Volume", f"{avg_volume:.0f}")
+        if len(df) >= 2:
+            latest_price = df['close_price'].iloc[-1]
+            price_change = latest_price - df['close_price'].iloc[-2]
+            percent_change = (price_change / df['close_price'].iloc[-2]) * 100
+            
+            highest_price = df['high_price'].max()
+            lowest_price = df['low_price'].min()
+            avg_volume = df['volume'].mean()
+            
+            col1.metric("Latest Price", f"${latest_price:.2f}", f"{percent_change:.2f}%")
+            col2.metric("Highest Price", f"${highest_price:.2f}")
+            col3.metric("Lowest Price", f"${lowest_price:.2f}")
+            col4.metric("Avg Volume", f"{avg_volume:.0f}")
+        else:
+            st.warning("⚠️ Not enough data to compute key statistics. At least two data points are required.")
     
     with tab2:
         st.header(f"{selected_stock} Sentiment Analysis")
@@ -199,7 +202,7 @@ else:
         
         # Display correlation heatmap
         corr_plt = plot_correlation_heatmap(df, selected_stock)
-        st.pyplot(corr_plt.figure)
+        st.plotly_chart(corr_plt, use_container_width=True)
         
         # Feature selection for detailed correlation
         st.subheader("Detailed Correlation Analysis")

@@ -51,7 +51,7 @@ st.sidebar.header("Filters")
 debug_mode = st.sidebar.checkbox("Debug Mode", value=False)
 
 # Stock selection with URL parameter support
-default_stocks_str = params.get("stock_symbols", ["GOOG,AMD,COST,PYPL,QCOM,ABDE,PEP,CMCSA,INTC,SBUX"])[0]
+default_stocks_str = params.get("stock_symbols", ["GOOG,AMD,COST,PYPL,QCOM,ADBE,PEP,CMCSA,INTC,SBUX"])[0]
 default_stocks = [s.strip() for s in default_stocks_str.split(",")]
 
 # Ensure single character stocks are properly expanded
@@ -156,6 +156,20 @@ else:
     with tab1:
         st.header(f"{selected_stock} - Actual vs. Predicted Prices")
         
+        # Add description for chart interpretation
+        st.markdown("""
+        **How to interpret this chart:**
+        - **Blue line**: Historical actual stock prices
+        - **Red line**: Historical prediction line
+        - **Yellow line**: Latest prediction segment (connecting the last two predictions)
+        - **Green dashed line**: Rolling average of actual prices
+        
+        **Interactions available:**
+        - Hover over data points to see exact values
+        - Use the toolbar on the right to zoom, pan, or download the chart
+        - Double-click to reset the view
+        """)
+        
         # Price comparison chart
         comparison_fig = plot_prediction_comparison(df, selected_stock)
         st.plotly_chart(comparison_fig, use_container_width=True)
@@ -208,6 +222,28 @@ else:
     with tab2:
         st.header(f"{selected_stock} - Prediction Error Analysis")
         
+        # Add description for chart interpretation
+        st.markdown("""
+        **How to interpret these charts:**
+        - **Top panel (Raw Error)**: Shows the difference between actual and predicted prices over time
+          - Values above zero: Underestimated predictions (actual price was higher)
+          - Values below zero: Overestimated predictions (predicted price was higher)
+          - Red dotted line: Mean error
+        
+        - **Middle panel (Absolute Error)**: Shows the magnitude of errors regardless of direction
+          - Higher values indicate larger prediction errors
+          - Filled area highlights error magnitude
+        
+        - **Bottom panel (Percentage Error)**: Shows error relative to actual price
+          - Normalizes errors across different price levels
+          - Useful for comparing accuracy across time periods with different price ranges
+        
+        **What to look for:**
+        - Patterns in errors over time (consistently over/under-predicting)
+        - Time periods with unusually high errors
+        - Correlation between errors and market events
+        """)
+        
         # Error analysis chart
         error_fig = plot_error_analysis(df, selected_stock)
         st.plotly_chart(error_fig, use_container_width=True)
@@ -255,6 +291,27 @@ else:
     
     with tab3:
         st.header(f"{selected_stock} - Error Distribution Analysis")
+        
+        # Add description for chart interpretation
+        st.markdown("""
+        **How to interpret these histograms:**
+        - **Left panel (Error Distribution)**: Shows the distribution of raw prediction errors
+          - Center (0): Perfect predictions
+          - Right side (>0): Underestimations (predicted too low)
+          - Left side (<0): Overestimations (predicted too high)
+          - Bell-shaped/normal distribution: Errors are random and unbiased
+          - Skewed distribution: Systematic bias in predictions
+        
+        - **Right panel (Percentage Error)**: Shows the distribution of percent errors
+          - Helps understand relative impact of errors
+          - Wide distribution: High prediction variability
+          - Narrow distribution: Consistent prediction performance
+        
+        **What to look for:**
+        - Symmetry around zero (balanced predictions)
+        - Outliers or extreme values (unusual prediction errors)
+        - Multiple peaks (different prediction regimes or market conditions)
+        """)
         
         # Error distribution chart
         distribution_fig = plot_error_distribution(df, selected_stock)
@@ -379,15 +436,37 @@ else:
             st.plotly_chart(volatility_fig, use_container_width=True)
             
             st.info("""
-            This analysis shows the relationship between market volatility and prediction error.
-            A strong positive correlation indicates that the model struggles more during volatile periods.
+            This analysis shows the relationship between market volatility and prediction error. A strong positive correlation indicates that the model struggles more during volatile periods.
+            """)
+            
+            # Add more detailed interpretation guidance
+            st.markdown("""
+            **How to interpret this graph:**
+            
+            - **Scatter Points**: Each point represents a prediction, colored by date (newer predictions are lighter).
+            - **Red Trend Line**: Shows the overall relationship between volatility and error.
+            - **Correlation Value**: A value close to 1 means errors increase significantly with volatility, while values near 0 suggest little relationship.
+            - **Volatility Clusters**: Look for clusters of points at specific volatility levels - these can reveal market regimes.
+            - **Outliers**: Points far above the trend line represent predictions that performed exceptionally poorly relative to the volatility level.
+            
+            **Actionable insights:**
+            - If correlation is high (>0.5), consider using separate models for high/low volatility periods.
+            - If most errors occur in specific volatility ranges, those market conditions might require model adjustments.
+            - Predictions made during periods with volatility above 0.3 (annualized) typically have higher uncertainty.
             """)
     
     with tab5:
         st.header("Model Evaluation Dashboard")
         st.markdown("""
-        This tab provides insights into model performance across different stocks and over time.
-        It helps identify which models are performing best and track improvements.
+        This tab provides comprehensive insights into model performance across different stocks and over time.
+        
+        **Key Features:**
+        - **Performance Summary**: Overall metrics showing model accuracy across all stocks
+        - **Stock Comparison**: Compare how models perform on different stocks to identify strengths and weaknesses
+        - **Time-based Analysis**: Track model improvements and performance trends over time
+        - **Raw Data Access**: View the underlying evaluation data for detailed analysis
+        
+        Use these insights to identify which models are performing best, where improvements are needed, and how model performance evolves over time. This information is valuable for model selection, refinement, and deployment decisions.
         """)
         
         # Load model evaluation data
@@ -435,6 +514,23 @@ else:
                     st.info("""
                     This chart shows how model performance has changed over time.
                     It helps identify trends and improvements in model accuracy.
+                    """)
+                    
+                    # Add more detailed interpretation guidance
+                    st.markdown("""
+                    **How to interpret this graph:**
+                    
+                    - **Time Progression**: The x-axis shows model training dates from oldest (left) to newest (right).
+                    - **Multiple Metrics**: Solid lines typically represent accuracy metrics (R²) where higher is better, while dashed lines represent error metrics (RMSE, MAE) where lower is better.
+                    - **Different Stocks**: Each color represents a different stock symbol if multiple stocks are being evaluated.
+                    - **Convergence**: Lines that flatten over time suggest the model is reaching its performance limit.
+                    - **Sudden Changes**: Sharp improvements or degradations can indicate significant model changes or data shifts.
+                    
+                    **What to look for:**
+                    - **Consistent Improvement**: Accuracy metrics should trend upward and error metrics downward over time.
+                    - **Seasonality**: Cyclical patterns in performance may indicate seasonal effects in the market.
+                    - **Diverging Performance**: If some stocks improve while others worsen, it may indicate the model is becoming specialized.
+                    - **Performance Plateaus**: Extended flat periods suggest a need for new features or modeling approaches.
                     """)
                 else:
                     st.warning("Could not create performance over time visualization.")

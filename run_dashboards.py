@@ -7,7 +7,7 @@ import time
 import signal
 import threading
 
-def run_dashboard(dashboard_name):
+def run_dashboard(dashboard_name, open_browser=True):
     """Run the specified dashboard"""
     if dashboard_name == "main":
         script = "visualizations/dashboard.py"
@@ -19,14 +19,15 @@ def run_dashboard(dashboard_name):
         print(f"Unknown dashboard: {dashboard_name}")
         return
     
-    # Build command
-    cmd = ["streamlit", "run", script, "--server.port", str(port)]
+    # Build command - add --server.headless=true to prevent Streamlit auto-browser
+    cmd = ["streamlit", "run", script, "--server.port", str(port), "--server.headless", "true"]
     
     # Run the command
     process = subprocess.Popen(cmd)
     
-    # Open the browser after a short delay
-    threading.Timer(2, lambda: webbrowser.open(f"http://localhost:{port}")).start()
+    # Open the browser after a short delay if requested
+    if open_browser:
+        threading.Timer(2, lambda: webbrowser.open(f"http://localhost:{port}")).start()
     
     try:
         # Wait for the process to complete
@@ -36,19 +37,20 @@ def run_dashboard(dashboard_name):
         process.send_signal(signal.SIGINT)
         process.wait()
 
-def run_all_dashboards():
+def run_all_dashboards(open_browser=True):
     """Run all dashboards"""
-    # Build commands
-    main_cmd = ["streamlit", "run", "visualizations/dashboard.py", "--server.port", "8501"]
-    pred_cmd = ["streamlit", "run", "visualizations/prediction_dashboard.py", "--server.port", "8502"]
+    # Build commands with --server.headless=true to prevent auto-browser
+    main_cmd = ["streamlit", "run", "visualizations/dashboard.py", "--server.port", "8501", "--server.headless", "true"]
+    pred_cmd = ["streamlit", "run", "visualizations/prediction_dashboard.py", "--server.port", "8502", "--server.headless", "true"]
     
     # Run the commands
     main_process = subprocess.Popen(main_cmd)
     pred_process = subprocess.Popen(pred_cmd)
     
-    # Open browsers after a short delay
-    threading.Timer(2, lambda: webbrowser.open("http://localhost:8501")).start()
-    threading.Timer(3, lambda: webbrowser.open("http://localhost:8502")).start()
+    # Open browsers after a short delay if requested
+    if open_browser:
+        threading.Timer(2, lambda: webbrowser.open("http://localhost:8501")).start()
+        threading.Timer(3, lambda: webbrowser.open("http://localhost:8502")).start()
     
     try:
         # Wait for processes to complete
@@ -65,10 +67,15 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run stock prediction dashboards")
     parser.add_argument("--dashboard", choices=["main", "prediction", "all"], default="main",
                         help="Which dashboard to run (default: main)")
+    parser.add_argument("--no-browser", action="store_true", 
+                        help="Don't automatically open a browser window")
     
     args = parser.parse_args()
     
+    # Determine if browser should be opened
+    open_browser = not args.no_browser
+    
     if args.dashboard == "all":
-        run_all_dashboards()
+        run_all_dashboards(open_browser=open_browser)
     else:
-        run_dashboard(args.dashboard) 
+        run_dashboard(args.dashboard, open_browser=open_browser) 
