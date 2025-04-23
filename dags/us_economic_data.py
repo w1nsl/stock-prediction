@@ -6,6 +6,7 @@ from psycopg2.extras import execute_batch
 from psycopg2 import Error as PgError
 import os
 from dotenv import load_dotenv
+from airflow.providers.postgres.hooks.postgres import PostgresHook
 
 # Load environment variables
 load_dotenv()
@@ -57,7 +58,10 @@ def download_fred_data(start_date=None, end_date=None) -> pd.DataFrame:
             
             if data is None or data.empty:
                 print(f"Warning: No data retrieved for {name} ({series_info['code']})")
-                return pd.DataFrame(index=pd.date_range(start=start_date, end=end_date, freq='B'))
+                # Create empty DataFrame with complete date range
+                empty_df = pd.DataFrame(index=pd.date_range(start=start_date, end=end_date, freq='D'))
+                empty_df[name] = None
+                return empty_df
             
             print(f"Retrieved {len(data)} observations for {name}")
             
@@ -65,24 +69,27 @@ def download_fred_data(start_date=None, end_date=None) -> pd.DataFrame:
             df = data.to_frame(name=name)
             df.index = pd.to_datetime(df.index)
             
-            # Create business day index from query_start to end_date
-            daily_index = pd.date_range(start=query_start, end=end_date, freq='B')
+            # Create complete date range (including weekends)
+            daily_index = pd.date_range(start=query_start, end=end_date, freq='D')
             
             # Handle different frequencies
             if series_info['freq'] == 'Q':
                 # For quarterly data, resample to end of quarter first
-                df = df.resample('Q').last()
+                df = df.resample('QE').last()
                 df = df.reindex(daily_index)
-                df[name] = df[name].ffill()  # Forward fill all gaps for quarterly data
+                # Forward fill all gaps for quarterly data (no limit)
+                df[name] = df[name].ffill()
             elif series_info['freq'] == 'M':
                 # For monthly data, resample to end of month first
-                df = df.resample('M').last()
+                df = df.resample('ME').last()
                 df = df.reindex(daily_index)
-                df[name] = df[name].ffill()  # Forward fill all gaps for monthly data
+                # Forward fill all gaps for monthly data (no limit)
+                df[name] = df[name].ffill()
             else:
-                # For daily data, reindex to business days and fill small gaps
+                # For daily data, reindex to all days
                 df = df.reindex(daily_index)
-                df[name] = df[name].ffill(limit=5)  # Only fill up to 5 days for daily data
+                # Forward fill all gaps for daily data (no limit)
+                df[name] = df[name].ffill()
             
             # Filter to requested date range
             df = df[df.index >= start_date]
@@ -91,13 +98,19 @@ def download_fred_data(start_date=None, end_date=None) -> pd.DataFrame:
             # Print data availability for debugging
             available = df[name].notna().sum()
             total = len(df)
-            print(f"{name}: {available}/{total} data points available ({(available/total)*100:.1f}%)")
+            if total > 0:  # Avoid division by zero
+                print(f"{name}: {available}/{total} data points available ({(available/total)*100:.1f}%)")
+            else:
+                print(f"{name}: No data points in date range")
             
             return df
             
         except Exception as e:
             print(f"Error downloading {name} data: {e}")
-            return pd.DataFrame(index=pd.date_range(start=start_date, end=end_date, freq='B'))
+            # Return empty DataFrame with the correct index and column
+            empty_df = pd.DataFrame(index=pd.date_range(start=start_date, end=end_date, freq='D'))
+            empty_df[name] = None
+            return empty_df
 
     # Download and combine all data
     all_dfs = []
@@ -105,6 +118,21 @@ def download_fred_data(start_date=None, end_date=None) -> pd.DataFrame:
         df = get_daily_data(info, name)
         all_dfs.append(df)
         
+    # If start_date and end_date are the same, ensure we have at least that date
+    if start_date == end_date:
+        # Make sure we have the exact date even if it's not a business day
+        exact_date_index = pd.DatetimeIndex([start_date])
+        for i, df in enumerate(all_dfs):
+            name = df.columns[0]
+            # Get the most recent value before this date
+            if not df.empty:
+                prev_values = df[df.index < start_date]
+                if not prev_values.empty:
+                    last_value = prev_values[name].iloc[-1]
+                    # Create a new DataFrame with just the exact date
+                    exact_df = pd.DataFrame({name: [last_value]}, index=exact_date_index)
+                    all_dfs[i] = exact_df
+    
     final_df = pd.concat(all_dfs, axis=1)
     final_df.index.name = 'date'
     final_df.reset_index(inplace=True)
@@ -143,8 +171,8 @@ def validate_data(df: pd.DataFrame) -> None:
         print("Warning: Negative SP500 values found")
 
 
-def insert_fred_data_manual(df: pd.DataFrame, db_params: Dict[str, str]) -> None:
-    """Insert economic data into PostgreSQL database."""
+def insert_fred_data_manual(df: pd.DataFrame, conn_id: str) -> None:
+    """Insert economic data into PostgreSQL database using Airflow connection."""
     if df.empty:
         raise ValueError("No data to insert")
     
@@ -163,6 +191,8 @@ def insert_fred_data_manual(df: pd.DataFrame, db_params: Dict[str, str]) -> None
         fed_funds_rate FLOAT,
         sp500 FLOAT
     );
+
+    CREATE INDEX IF NOT EXISTS idx_economic_date_fed_rate ON us_economic_data_daily(date, fed_funds_rate);
     """
 
     insert_query = """
@@ -172,12 +202,16 @@ def insert_fred_data_manual(df: pd.DataFrame, db_params: Dict[str, str]) -> None
     ON CONFLICT (date) DO NOTHING;
     """
 
-    conn = None
     try:
-        conn = psycopg2.connect(**db_params)
+        # Get connection using Airflow hook
+        hook = PostgresHook(postgres_conn_id=conn_id)
+        conn = hook.get_conn()
         cur = conn.cursor()
+        
+        # Create table
         cur.execute(create_table_query)
 
+        # Prepare data for insertion
         records = [
             (
                 row['date'],
@@ -191,16 +225,20 @@ def insert_fred_data_manual(df: pd.DataFrame, db_params: Dict[str, str]) -> None
             for _, row in df.iterrows()
         ]
 
+        # Insert data
         execute_batch(cur, insert_query, records)
         conn.commit()
         print(f"Successfully inserted {len(records)} economic metric records into the database.")
+        
     except Exception as e:
-        if conn:
+        if 'conn' in locals():
             conn.rollback()
         print(f"Error inserting data: {e}")
+        raise
     finally:
-        if conn:
+        if 'cur' in locals():
             cur.close()
+        if 'conn' in locals():
             conn.close()
 
 
@@ -214,16 +252,8 @@ if __name__ == '__main__':
 
         validate_data(df)
 
-        db_params = {
-            'host': os.getenv('DB_HOST'),
-            'database': os.getenv('DB_NAME'),
-            'user': os.getenv('DB_USER'),
-            'password': os.getenv('DB_PASSWORD'),
-            'port': int(os.getenv('DB_PORT')),
-            'sslmode': os.getenv('DB_SSLMODE')
-        }
-
-        insert_fred_data_manual(df, db_params)
+        # Use Airflow connection ID
+        insert_fred_data_manual(df, 'neon_db')
         print("\nAll operations completed successfully!")
     except Exception as e:
         print(f"\nError in main execution: {e}")

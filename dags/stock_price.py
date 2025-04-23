@@ -6,6 +6,7 @@ from psycopg2.extras import execute_batch
 from datetime import datetime
 import os
 from dotenv import load_dotenv
+from airflow.providers.postgres.hooks.postgres import PostgresHook
 
 # Load environment variables
 load_dotenv()
@@ -40,7 +41,8 @@ def clean_stock_data(data_dict):
             print(f"Error cleaning {ticker}: {e}")
     return cleaned_data
 
-def insert_stock_data(data_dict, db_params):
+def insert_stock_data(data_dict, conn_id):
+    """Insert stock data into PostgreSQL database using Airflow connection"""
     create_table_sql = """
     DROP TABLE IF EXISTS stock_data;
     CREATE TABLE stock_data (
@@ -62,12 +64,16 @@ def insert_stock_data(data_dict, db_params):
     ON CONFLICT (ticker, date) DO NOTHING
     """
 
-    conn = None
     try:
-        conn = psycopg2.connect(**db_params)
+        # Get connection using Airflow hook
+        hook = PostgresHook(postgres_conn_id=conn_id)
+        conn = hook.get_conn()
         cur = conn.cursor()
+        
+        # Create table
         cur.execute(create_table_sql)
 
+        # Prepare data for insertion
         data_to_insert = []
         for ticker, df in data_dict.items():
             for date, row in df.iterrows():
@@ -82,22 +88,29 @@ def insert_stock_data(data_dict, db_params):
                     int(row['Volume'])
                 ))
 
+        # Insert data
         execute_batch(cur, insert_sql, data_to_insert)
         conn.commit()
         print(f"Successfully inserted data for {len(data_dict)} tickers")
 
     except Exception as e:
-        if conn:
+        if 'conn' in locals():
             conn.rollback()
         print(f"Error inserting data: {e}")
+        raise
     finally:
-        if conn:
+        if 'cur' in locals():
+            cur.close()
+        if 'conn' in locals():
             conn.close()
 
 if __name__ == "__main__":
-    tickers = ['AAPL']  # Only AAPL to match article_sentiment.py
-    start_date = '2023-01-01'
-    end_date = '2023-03-01'
+    tickers = [
+        "ADBE", "CMCSA", "QCOM", "GOOG", "PEP",
+        "SBUX", "COST", "AMD", "INTC", "PYPL"
+    ]
+    start_date = '2019-01-01'
+    end_date = '2023-12-31'
 
     raw_data = download_stock_data(tickers, start_date, end_date)
     cleaned_data = clean_stock_data(raw_data)
@@ -112,15 +125,6 @@ if __name__ == "__main__":
         df.to_csv(csv_filename, index=True)
         print(f"Saved to {csv_filename}")'''
 
-    # Using environment variables for database connection
-    db_params = {
-        'host': os.getenv('DB_HOST'),
-        'database': os.getenv('DB_NAME'),
-        'user': os.getenv('DB_USER'),
-        'password': os.getenv('DB_PASSWORD'),
-        'port': int(os.getenv('DB_PORT')),
-        'sslmode': os.getenv('DB_SSLMODE')
-    }
-
-    insert_stock_data(cleaned_data, db_params)
+    # Use Airflow connection ID
+    insert_stock_data(cleaned_data, 'neon_db')
     print("\nAll operations completed successfully!")

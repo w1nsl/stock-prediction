@@ -1,149 +1,150 @@
 import pandas as pd
+import numpy as np
+from datetime import datetime, timedelta
 import psycopg2
 from psycopg2.extras import execute_batch
 import os
 from dotenv import load_dotenv
-from article_sentiment import extract_articles, analyze_finbert_sentiment, aggregate_daily_sentiment
+from article_sentiment import extract_articles, analyze_sentiment, aggregate_daily_sentiment
 from stock_price import download_stock_data, clean_stock_data
 from us_economic_data import download_fred_data
 from tqdm import tqdm
 import time
 from multiprocessing import Pool, cpu_count
 from functools import partial
+from airflow.hooks.postgres_hook import PostgresHook
 
 # Load environment variables
 load_dotenv()
 
-def merge_all_data(ticker: str, start_date: str, end_date: str, economic_df: pd.DataFrame) -> pd.DataFrame:
+def merge_all_data(stock_symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
     """
-    Merge stock price, article sentiment, and economic data.
+    Merge stock price, sentiment, and economic data for a given stock symbol and date range.
+    Handles missing stock price data by forward filling from the previous day.
     
     Args:
-        ticker: Stock ticker symbol
+        stock_symbol: Stock symbol to merge data for
         start_date: Start date in 'YYYY-MM-DD' format
         end_date: End date in 'YYYY-MM-DD' format
-        economic_df: Pre-fetched economic data DataFrame
         
     Returns:
         DataFrame containing merged data
     """
-    print(f"\nProcessing {ticker} from {start_date} to {end_date}")
-    
     try:
-        # Get stock data
-        raw_stock_data = download_stock_data([ticker], start_date, end_date)
-        if ticker not in raw_stock_data:
-            raise ValueError(f"No stock data found for {ticker}")
+        # Get database connection
+        pg_hook = PostgresHook(postgres_conn_id='neon_db')
+        conn = pg_hook.get_conn()
+        
+        # Get stock price data
+        stock_query = f"""
+        SELECT * FROM stock_data 
+        WHERE ticker = '{stock_symbol}'
+        AND date >= '{start_date}'
+        AND date <= '{end_date}'
+        ORDER BY date
+        """
+        stock_df = pd.read_sql(stock_query, conn)
+        
+        # Create a complete date range
+        date_range = pd.date_range(start=start_date, end=end_date, freq='D')
+        date_df = pd.DataFrame({'date': date_range})
+        
+        # If we have stock data, merge it with the complete date range
+        if not stock_df.empty:
+            # Convert date to datetime for merging
+            stock_df['date'] = pd.to_datetime(stock_df['date'])
             
-        stock_df = clean_stock_data(raw_stock_data)[ticker].reset_index()
-        stock_df['ticker'] = ticker
-        
-        # Get article sentiment data
-        df_raw = extract_articles(top_stocks=[ticker], start_date=start_date, end_date=end_date)
-        
-        # Create empty sentiment DataFrame with all required columns if no articles found
-        if df_raw.empty:
-            print(f"No articles found for {ticker}, using default sentiment values")
-            sentiment_df = pd.DataFrame({
-                'Stock_symbol': [ticker],
-                'Date': [pd.to_datetime(start_date).date()],
-                'daily_sentiment': [0],
-                'article_count': [0],
-                'sentiment_std': [0],
-                'positive_ratio': [0],
-                'negative_ratio': [0],
-                'neutral_ratio': [0],
-                'sentiment_median': [0],
-                'sentiment_min': [0],
-                'sentiment_max': [0],
-                'sentiment_range': [0]
-            })
+            # Merge with complete date range
+            stock_df = date_df.merge(stock_df, on='date', how='left')
+            
+            # Forward fill missing stock data
+            stock_cols = ['open_price', 'high_price', 'low_price', 'close_price', 
+                         'adj_close', 'volume', 'stock_symbol']
+            stock_df[stock_cols] = stock_df[stock_cols].ffill()
+            
+            # Backward fill stock_symbol for any remaining missing values
+            stock_df['stock_symbol'] = stock_df['stock_symbol'].bfill()
         else:
-            df_scored = analyze_finbert_sentiment(df_raw)
-            sentiment_df = aggregate_daily_sentiment(df_scored)
+            # If no stock data, create empty DataFrame with complete date range
+            stock_df = date_df
+            stock_df['stock_symbol'] = stock_symbol
+            for col in ['open_price', 'high_price', 'low_price', 'close_price', 
+                       'adj_close', 'volume']:
+                stock_df[col] = None
         
-        # Rename columns for clarity and consistency
-        stock_df = stock_df.rename(columns={
-            'Date': 'date',
-            'Open': 'open_price',
-            'High': 'high_price',
-            'Low': 'low_price',
-            'Close': 'close_price',
-            'Adj Close': 'adj_close',
-            'Volume': 'volume'
-        })
+        # Get sentiment data
+        sentiment_query = f"""
+        SELECT * FROM daily_article_sentiment 
+        WHERE stock_symbol = '{stock_symbol}'
+        AND date >= '{start_date}'
+        AND date <= '{end_date}'
+        ORDER BY date
+        """
+        sentiment_df = pd.read_sql(sentiment_query, conn)
         
-        # Ensure consistent column names in sentiment_df
-        sentiment_df = sentiment_df.rename(columns={
-            'Stock_symbol': 'stock_symbol',
-            'Date': 'date'
-        })
+        # Get economic data
+        economic_query = f"""
+        SELECT * FROM us_economic_data_daily 
+        WHERE date >= '{start_date}'
+        AND date <= '{end_date}'
+        ORDER BY date
+        """
+        economic_df = pd.read_sql(economic_query, conn)
         
-        # Convert date columns to datetime and ensure they're date objects
-        stock_df['date'] = pd.to_datetime(stock_df['date']).dt.date
-        sentiment_df['date'] = pd.to_datetime(sentiment_df['date']).dt.date
+        # Close database connection
+        conn.close()
         
-        # Align stock_symbol column for merging
-        stock_df = stock_df.rename(columns={"ticker": "stock_symbol"})
+        # Convert dates to datetime for merging
+        sentiment_df['date'] = pd.to_datetime(sentiment_df['date'])
+        economic_df['date'] = pd.to_datetime(economic_df['date'])
         
-        # Merge stock data with sentiment data
-        merged_df = pd.merge(
-            stock_df,
-            sentiment_df,
-            on=['date', 'stock_symbol'],
-            how='outer'
-        )
+        # Merge all data
+        merged_df = stock_df.merge(sentiment_df, on=['date', 'stock_symbol'], how='left')
+        merged_df = merged_df.merge(economic_df, on='date', how='left')
         
-        # Merge with economic data
-        final_df = pd.merge(
-            merged_df,
-            economic_df,
-            on='date',
-            how='outer'
-        )
+        # Fill missing values
+        # Forward fill stock data
+        stock_cols = ['open_price', 'high_price', 'low_price', 'close_price', 
+                     'adj_close', 'volume']
+        merged_df[stock_cols] = merged_df[stock_cols].ffill()
         
-        # Sort by date and stock_symbol
-        final_df = final_df.sort_values(by=['stock_symbol', 'date']).reset_index(drop=True)
+        # Forward fill economic data
+        economic_cols = ['gdp', 'real_gdp', 'unemployment_rate', 'cpi', 
+                        'fed_funds_rate', 'sp500']
+        merged_df[economic_cols] = merged_df[economic_cols].ffill()
         
-        # Fill missing stock prices and economic indicators
-        price_cols = [
-            'open_price', 'high_price', 'low_price', 'close_price', 'adj_close', 'volume',
-            'gdp', 'real_gdp', 'unemployment_rate', 'cpi', 'fed_funds_rate', 'sp500'
-        ]
-        for col in price_cols:
-            final_df[col] = final_df.groupby("stock_symbol")[col].transform(lambda g: g.ffill())
+        # Fill sentiment data with zeros where missing
+        sentiment_cols = ['daily_sentiment', 'article_count', 'sentiment_std', 
+                         'positive_ratio', 'negative_ratio', 'neutral_ratio', 
+                         'sentiment_median', 'sentiment_min', 'sentiment_max', 
+                         'sentiment_range']
+        merged_df[sentiment_cols] = merged_df[sentiment_cols].fillna(0)
         
-        # Drop any remaining rows with missing values
-        final_df = final_df.dropna(subset=price_cols)
+        # Ensure stock_symbol is filled
+        merged_df['stock_symbol'] = merged_df['stock_symbol'].fillna(stock_symbol)
         
-        # Fill sentiment features
-        sentiment_cols = [
-            'daily_sentiment', 'article_count', 'sentiment_std',
-            'positive_ratio', 'negative_ratio', 'neutral_ratio',
-            'sentiment_median', 'sentiment_min', 'sentiment_max',
-            'sentiment_range'
-        ]
-        for col in sentiment_cols:
-            final_df[col] = final_df[col].fillna(0)
+        # Sort by date
+        merged_df = merged_df.sort_values('date')
         
-        return final_df
+        return merged_df
         
     except Exception as e:
-        print(f"\nError processing {ticker}: {str(e)}")
+        print(f"Error merging data for {stock_symbol}: {str(e)}")
         raise
 
-def insert_merged_data_to_db(df: pd.DataFrame, db_params: dict, table_name: str = "merged_stock_data"):
+def insert_merged_data_to_db(df: pd.DataFrame, table_name: str = "merged_stock_data"):
     """
-    Insert merged data into the database.
+    Insert merged data into the database using Airflow connection.
+    Skips entries that already exist in the database.
     
     Args:
         df: DataFrame containing merged data
-        db_params: Dictionary containing database connection parameters
         table_name: Name of the table to insert data into
     """
-    conn = None
     try:
-        conn = psycopg2.connect(**db_params)
+        # Get the Postgres connection from Airflow
+        pg_hook = PostgresHook(postgres_conn_id='neon_db')
+        conn = pg_hook.get_conn()
         cursor = conn.cursor()
         
         # Create table if it doesn't exist
@@ -177,6 +178,13 @@ def insert_merged_data_to_db(df: pd.DataFrame, db_params: dict, table_name: str 
         )
         """
         cursor.execute(create_table_query)
+        
+        # Create indexes if they don't exist
+        create_index_query = f"""
+        CREATE INDEX IF NOT EXISTS idx_merged_stock_date ON {table_name}(stock_symbol, date);
+        CREATE INDEX IF NOT EXISTS idx_merged_date_adj_close ON {table_name}(date, adj_close);
+        """
+        cursor.execute(create_index_query)
         
         # Prepare records for batch insert
         records = [
@@ -220,29 +228,7 @@ def insert_merged_data_to_db(df: pd.DataFrame, db_params: dict, table_name: str 
         ) VALUES (
             %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
         )
-        ON CONFLICT (date, stock_symbol) DO UPDATE SET
-            open_price = EXCLUDED.open_price,
-            high_price = EXCLUDED.high_price,
-            low_price = EXCLUDED.low_price,
-            close_price = EXCLUDED.close_price,
-            adj_close = EXCLUDED.adj_close,
-            volume = EXCLUDED.volume,
-            daily_sentiment = EXCLUDED.daily_sentiment,
-            article_count = EXCLUDED.article_count,
-            sentiment_std = EXCLUDED.sentiment_std,
-            positive_ratio = EXCLUDED.positive_ratio,
-            negative_ratio = EXCLUDED.negative_ratio,
-            neutral_ratio = EXCLUDED.neutral_ratio,
-            sentiment_median = EXCLUDED.sentiment_median,
-            sentiment_min = EXCLUDED.sentiment_min,
-            sentiment_max = EXCLUDED.sentiment_max,
-            sentiment_range = EXCLUDED.sentiment_range,
-            gdp = EXCLUDED.gdp,
-            real_gdp = EXCLUDED.real_gdp,
-            unemployment_rate = EXCLUDED.unemployment_rate,
-            cpi = EXCLUDED.cpi,
-            fed_funds_rate = EXCLUDED.fed_funds_rate,
-            sp500 = EXCLUDED.sp500
+        ON CONFLICT (date, stock_symbol) DO NOTHING
         """
         
         execute_batch(cursor, insert_query, records)
@@ -259,7 +245,7 @@ def insert_merged_data_to_db(df: pd.DataFrame, db_params: dict, table_name: str 
             cursor.close()
             conn.close()
 
-def process_single_stock(ticker: str, start_date: str, end_date: str, db_params: dict, economic_df: pd.DataFrame) -> tuple:
+def process_single_stock(ticker: str, start_date: str, end_date: str) -> tuple:
     """
     Process a single stock and return the result.
     
@@ -267,15 +253,13 @@ def process_single_stock(ticker: str, start_date: str, end_date: str, db_params:
         ticker: Stock ticker symbol
         start_date: Start date in 'YYYY-MM-DD' format
         end_date: End date in 'YYYY-MM-DD' format
-        db_params: Database connection parameters
-        economic_df: Pre-fetched economic data DataFrame
         
     Returns:
         tuple: (ticker, success, error_message)
     """
     try:
-        merged_data = merge_all_data(ticker, start_date, end_date, economic_df)
-        insert_merged_data_to_db(merged_data, db_params, table_name="merged_stocks_new")
+        merged_data = merge_all_data(ticker, start_date, end_date)
+        insert_merged_data_to_db(merged_data, table_name="merged_stocks_new")
         print(f"Successfully processed {ticker}")
         return (ticker, True, None)
     except Exception as e:
@@ -288,45 +272,12 @@ if __name__ == "__main__":
     start_date = '2019-01-01'
     end_date = '2023-12-31'
     
-    # Using environment variables for database connection
-    db_params = {
-        'host': os.getenv('DB_HOST'),
-        'database': os.getenv('DB_NAME'),
-        'user': os.getenv('DB_USER'),
-        'password': os.getenv('DB_PASSWORD'),
-        'port': int(os.getenv('DB_PORT')),
-        'sslmode': os.getenv('DB_SSLMODE')
-    }
-    
-    # Fetch economic data once for all stocks
-    print("Fetching economic data...")
-    economic_df = download_fred_data(start_date=start_date, end_date=end_date)
-    economic_df = economic_df.rename(columns={
-        'GDP': 'gdp',
-        'Real_GDP': 'real_gdp',
-        'Unemployment_Rate': 'unemployment_rate',
-        'CPI': 'cpi',
-        'Fed_Funds_Rate': 'fed_funds_rate',
-        'SP500': 'sp500'
-    })
-    economic_df['date'] = pd.to_datetime(economic_df['date']).dt.date
-    
     # Process stocks in parallel
     print(f"\nProcessing {len(stocks)} stocks from {start_date} to {end_date}")
     
-    # Create a partial function with fixed parameters
-    process_func = partial(process_single_stock, 
-                         start_date=start_date, 
-                         end_date=end_date, 
-                         db_params=db_params,
-                         economic_df=economic_df)
-    
-    # Use number of CPU cores minus 1 to leave one core free for system processes
-    num_processes = max(1, cpu_count() - 1)
-    
     # Process stocks in parallel with progress bar
-    with Pool(processes=num_processes) as pool:
-        results = list(tqdm(pool.imap(process_func, stocks), 
+    with Pool(processes=cpu_count()) as pool:
+        results = list(tqdm(pool.starmap(process_single_stock, [(ticker, start_date, end_date) for ticker in stocks]), 
                           total=len(stocks), 
                           desc="Processing stocks"))
     
