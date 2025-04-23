@@ -18,9 +18,6 @@ from visualizations.predictions import (
     calculate_metrics,
     plot_accuracy_vs_horizon,
     plot_performance_by_volatility,
-    load_feature_importance,
-    FEATURE_DESCRIPTIONS,
-    MODEL_INTERPRETATIONS,
     load_model_evaluations,
     plot_model_comparison,
     plot_performance_over_time
@@ -50,12 +47,23 @@ error analysis, and model performance metrics.
 # Sidebar filters
 st.sidebar.header("Filters")
 
+# Add debug mode toggle
+debug_mode = st.sidebar.checkbox("Debug Mode", value=False)
+
 # Stock selection with URL parameter support
 default_stocks_str = params.get("stock_symbols", ["GOOG,AMD,COST,PYPL,QCOM,ABDE,PEP,CMCSA,INTC,SBUX"])[0]
 default_stocks = [s.strip() for s in default_stocks_str.split(",")]
 
+# Ensure single character stocks are properly expanded
+# This fixes the issue where "G" is shown instead of "GOOG"
+default_stocks = [stock if len(stock) > 1 else "GOOG" if stock == "G" else stock for stock in default_stocks]
+
 all_stocks = st.sidebar.text_input("Enter stock symbols (comma-separated)", ",".join(default_stocks))
 all_stocks = [s.strip().upper() for s in all_stocks.split(",") if s.strip()]
+
+# Ensure the selected stock exists in the list and is properly expanded
+if len(all_stocks) == 1 and len(all_stocks[0]) == 1 and all_stocks[0] == "G":
+    all_stocks = ["GOOG"]
 
 # Default selected stock from URL params
 default_selected_stock = params.get("selected_stock", [default_stocks[0] if default_stocks else "GOOG"])[0]
@@ -64,7 +72,7 @@ selected_stock = st.sidebar.selectbox("Select Stock", all_stocks, index=all_stoc
 # Date range selection with URL parameter support
 today = datetime.now()
 default_start = datetime.strptime("2023/06/16", "%Y/%m/%d").date()
-default_end = datetime.strptime("2025/04/21", "%Y/%m/%d").date()
+default_end = datetime.strptime("2023/12/31", "%Y/%m/%d").date()
 
 # Get date parameters from URL if provided
 try:
@@ -139,10 +147,10 @@ else:
     cols[4].metric("Direction Accuracy", f"{metrics['Direction Accuracy']:.2f}%")
     
     # Tabs for different visualizations
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "Price Comparison", "Error Analysis", 
         "Error Distribution", "Advanced Analysis", 
-        "Feature Importance", "Model Evaluation"
+        "Model Evaluation"
     ])
     
     with tab1:
@@ -161,15 +169,28 @@ else:
         
         # Filter data based on period
         period_df = df.copy()
+        
+        # Make sure the date column is in datetime format for comparison
+        if not pd.api.types.is_datetime64_any_dtype(period_df['date']):
+            period_df['date'] = pd.to_datetime(period_df['date'])
+        
+        # Convert end_date to datetime for comparison
+        end_datetime = pd.to_datetime(end_date)
+        
         if selected_period == "Last Month":
-            cutoff_date = end_date - timedelta(days=30)
-            period_df = df[df['date'] >= cutoff_date]
+            cutoff_date = end_datetime - timedelta(days=30)
+            period_df = period_df[period_df['date'] >= cutoff_date]
         elif selected_period == "Last Quarter":
-            cutoff_date = end_date - timedelta(days=90)
-            period_df = df[df['date'] >= cutoff_date]
+            cutoff_date = end_datetime - timedelta(days=90)
+            period_df = period_df[period_df['date'] >= cutoff_date]
         elif selected_period == "Last 6 Months":
-            cutoff_date = end_date - timedelta(days=180)
-            period_df = df[df['date'] >= cutoff_date]
+            cutoff_date = end_datetime - timedelta(days=180)
+            period_df = period_df[period_df['date'] >= cutoff_date]
+        
+        # Debug information
+        st.caption(f"Period: {selected_period}, Data Points: {len(period_df)}")
+        if selected_period != "Full Period":
+            st.caption(f"Cutoff Date: {cutoff_date.strftime('%Y-%m-%d')}, End Date: {end_datetime.strftime('%Y-%m-%d')}")
         
         if len(period_df) > 0:
             period_metrics = calculate_metrics(period_df)
@@ -363,116 +384,6 @@ else:
             """)
     
     with tab5:
-        st.header("Model Feature Importance Analysis")
-        st.markdown("""
-        This tab shows which features have the most influence on the prediction models.
-        Understanding feature importance helps identify the key drivers of stock price movements.
-        """)
-        
-        # Load feature importance data with error handling
-        try:
-            with st.spinner("Loading feature importance data..."):
-                feature_data = load_feature_importance()
-                
-            # Prepare data frames for both models
-            rf_importance = None
-            lgbm_importance = None
-            
-            # Handle both tuple format and dictionary format
-            if isinstance(feature_data, tuple) and len(feature_data) == 2:
-                # New format: tuple of DataFrames
-                rf_importance, lgbm_importance = feature_data
-            elif isinstance(feature_data, dict):
-                # Old format: dictionary with model keys
-                rf_importance = feature_data.get('random_forest')
-                lgbm_importance = feature_data.get('lightgbm')
-            else:
-                st.warning("Feature importance data is in an unexpected format.")
-            
-            # Check if we have valid data for either model
-            have_rf_data = rf_importance is not None and not (hasattr(rf_importance, 'empty') and rf_importance.empty)
-            have_lgbm_data = lgbm_importance is not None and not (hasattr(lgbm_importance, 'empty') and lgbm_importance.empty)
-            
-            if have_rf_data or have_lgbm_data:
-                # Create tabs for models that have data
-                model_tabs_list = []
-                if have_rf_data:
-                    model_tabs_list.append("Random Forest")
-                if have_lgbm_data:
-                    model_tabs_list.append("LightGBM")
-                
-                model_tabs = st.tabs(model_tabs_list)
-                
-                # Display Random Forest data if available
-                tab_index = 0
-                if have_rf_data:
-                    with model_tabs[tab_index]:
-                        st.subheader("Random Forest Feature Importance")
-                        st.write(MODEL_INTERPRETATIONS.get('random_forest', ''))
-                        
-                        # Sort and get top features
-                        rf_top = rf_importance.sort_values('importance', ascending=False).head(10)
-                        
-                        # Create bar chart
-                        fig = px.bar(rf_top, x='importance', y='feature', orientation='h',
-                                    title='Top 10 Most Important Features - Random Forest',
-                                    labels={'importance': 'Importance Score', 'feature': 'Feature'},
-                                    color='importance', color_continuous_scale='Viridis')
-                        
-                        fig.update_layout(height=500, yaxis={'categoryorder': 'total ascending'})
-                        st.plotly_chart(fig, use_container_width=True)
-                        
-                        # Display feature descriptions
-                        st.subheader("Feature Descriptions")
-                        feature_descriptions = []
-                        for feature in rf_top['feature']:
-                            description = FEATURE_DESCRIPTIONS.get(feature, "No description available")
-                            feature_descriptions.append({
-                                "Feature": feature,
-                                "Description": description
-                            })
-                        
-                        st.table(pd.DataFrame(feature_descriptions))
-                    tab_index += 1
-                
-                # Display LightGBM data if available
-                if have_lgbm_data:
-                    with model_tabs[tab_index]:
-                        st.subheader("LightGBM Feature Importance")
-                        st.write(MODEL_INTERPRETATIONS.get('lightgbm', ''))
-                        
-                        # Sort and get top features
-                        lgbm_top = lgbm_importance.sort_values('importance', ascending=False).head(10)
-                        
-                        # Create bar chart
-                        fig = px.bar(lgbm_top, x='importance', y='feature', orientation='h',
-                                    title='Top 10 Most Important Features - LightGBM',
-                                    labels={'importance': 'Importance Score', 'feature': 'Feature'},
-                                    color='importance', color_continuous_scale='Teal')
-                        
-                        fig.update_layout(height=500, yaxis={'categoryorder': 'total ascending'})
-                        st.plotly_chart(fig, use_container_width=True)
-                        
-                        # Display feature descriptions
-                        st.subheader("Feature Descriptions")
-                        feature_descriptions = []
-                        for feature in lgbm_top['feature']:
-                            description = FEATURE_DESCRIPTIONS.get(feature, "No description available")
-                            feature_descriptions.append({
-                                "Feature": feature,
-                                "Description": description
-                            })
-                        
-                        st.table(pd.DataFrame(feature_descriptions))
-            else:
-                st.warning("No feature importance data is available for any model.")
-                
-        except Exception as e:
-            st.error(f"Error loading feature importance data: {str(e)}")
-            st.warning("Using the Feature Importance visualization requires data from trained models. Please check your database connection or model training status.")
-
-    # Add the new tab for model evaluation
-    with tab6:
         st.header("Model Evaluation Dashboard")
         st.markdown("""
         This tab provides insights into model performance across different stocks and over time.
@@ -538,5 +449,121 @@ st.sidebar.info("""
 This dashboard analyzes prediction performance using various metrics and visualizations.
 All data is loaded directly from the database with no sample data generation.
 """)
+
+# Debug section
+if debug_mode and not df.empty:
+    st.subheader("⚠️ Debug Data")
+    st.markdown("**This section shows raw data for debugging purposes**")
+    
+    # Display date information
+    st.write("### Date Information")
+    date_info = {
+        "Date Column Type": str(df['date'].dtype),
+        "First Date": str(df['date'].min()),
+        "Last Date": str(df['date'].max()),
+        "Total Days": len(df['date'].unique()),
+        "Number of Data Points": len(df)
+    }
+    st.json(date_info)
+    
+    # Show raw data
+    st.write("### Raw Data (First 10 rows)")
+    st.dataframe(df.head(10))
+    
+    # Show last 10 data points
+    st.write("### Raw Data (Last 10 rows)")
+    st.dataframe(df.tail(10))
+    
+    # Plot dates to check for gaps
+    if not pd.api.types.is_datetime64_any_dtype(df['date']):
+        date_df = df.copy()
+        date_df['date'] = pd.to_datetime(date_df['date'])
+    else:
+        date_df = df.copy()
+    
+    date_df = date_df.sort_values('date')
+    date_df['day_number'] = range(len(date_df))
+    
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=date_df['date'],
+            y=date_df['day_number'],
+            mode='markers+lines',
+            name='Date Sequence'
+        )
+    )
+    
+    fig.update_layout(
+        title="Date Sequence Check (Discontinuities may indicate missing dates)",
+        xaxis_title="Date",
+        yaxis_title="Sequential Day Number",
+        height=400
+    )
+    
+    st.plotly_chart(fig, use_container_width=True)
+    
+    # Display date differences
+    date_df['next_date'] = date_df['date'].shift(-1)
+    date_df['days_between'] = (date_df['next_date'] - date_df['date']).dt.total_seconds() / (60*60*24)
+    date_df = date_df.dropna(subset=['days_between'])
+    
+    if len(date_df) > 0:
+        avg_days = date_df['days_between'].mean()
+        max_days = date_df['days_between'].max()
+        
+        st.write(f"Average days between data points: {avg_days:.2f}")
+        st.write(f"Maximum days between data points: {max_days:.2f}")
+        
+        if max_days > avg_days * 1.5:
+            st.warning(f"There may be gaps in the data - maximum gap ({max_days:.2f} days) is significantly higher than average ({avg_days:.2f} days)")
+            # Show gaps
+            gaps = date_df[date_df['days_between'] > avg_days * 1.5][['date', 'next_date', 'days_between']]
+            if not gaps.empty:
+                st.write("### Data Gaps")
+                st.dataframe(gaps)
+    
+    # Add detailed analysis of key data points to check for shifts
+    st.write("### Data Point Analysis (Check for Shifts)")
+    
+    # Get original dataframe sorted by date
+    df_sorted = df.copy()
+    if not pd.api.types.is_datetime64_any_dtype(df_sorted['date']):
+        df_sorted['date'] = pd.to_datetime(df_sorted['date'])
+    df_sorted = df_sorted.sort_values('date')
+    
+    # Create mini dataframes for first and last 3 points
+    first_points = df_sorted.head(3).copy()
+    last_points = df_sorted.tail(3).copy()
+    
+    # Display first and last points with extra formatting
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.write("First 3 Data Points:")
+        st.dataframe(first_points[['date', 'actual_price', 'predicted_price']])
+        
+        # Calculate day gaps at the beginning
+        if len(first_points) > 1:
+            first_points['next_date'] = first_points['date'].shift(-1)
+            first_points['days_gap'] = (first_points['next_date'] - first_points['date']).dt.total_seconds() / (60*60*24)
+            first_gaps = first_points.dropna(subset=['days_gap'])[['date', 'next_date', 'days_gap']]
+            if not first_gaps.empty:
+                st.write("Day gaps between first points:")
+                st.dataframe(first_gaps)
+    
+    with col2:
+        st.write("Last 3 Data Points:")
+        st.dataframe(last_points[['date', 'actual_price', 'predicted_price']])
+        
+        # Calculate day gaps at the end
+        if len(last_points) > 1:
+            last_points_gaps = last_points.copy()
+            last_points_gaps['prev_date'] = last_points_gaps['date'].shift(1)
+            last_points_gaps['days_gap'] = (last_points_gaps['date'] - last_points_gaps['prev_date']).dt.total_seconds() / (60*60*24)
+            last_gaps = last_points_gaps.dropna(subset=['days_gap'])[['prev_date', 'date', 'days_gap']]
+            if not last_gaps.empty:
+                st.write("Day gaps between last points:")
+                st.dataframe(last_gaps)
 
 # Run the app with: streamlit run visualizations/prediction_dashboard.py 

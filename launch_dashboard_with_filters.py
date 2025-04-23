@@ -6,7 +6,7 @@ params = {
     "stock_symbols": "GOOG,AMD,COST,PYPL,QCOM,ABDE,PEP,CMCSA,INTC,SBUX",
     "selected_stock": "GOOG",
     "start_date": "2023-06-16",
-    "end_date": "2025-04-21"
+    "end_date": "2023-12-31"
 }
 
 # Build the URL with query parameters

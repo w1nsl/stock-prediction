@@ -141,35 +141,129 @@ def plot_prediction_comparison(df, stock_symbol, window_size=10):
     """
     fig = go.Figure()
     
-    # Add actual price line
+    # Get the data sorted by date
+    df_sorted = df.copy()
+    if not pd.api.types.is_datetime64_any_dtype(df_sorted['date']):
+        df_sorted['date'] = pd.to_datetime(df_sorted['date'])
+    df_sorted = df_sorted.sort_values('date')
+    
+    # Get all data except the last point for actual price display
+    actual_display_df = df_sorted.iloc[:-1].copy()
+    
+    # Add actual price line (excluding the last point)
     fig.add_trace(
         go.Scatter(
-            x=df['date'],
-            y=df['actual_price'],
-            mode='lines',
+            x=actual_display_df['date'],
+            y=actual_display_df['actual_price'],
+            mode='lines+markers',
             name='Actual Price',
             line=dict(color='blue', width=2)
         )
     )
     
-    # Add predicted price line
-    fig.add_trace(
-        go.Scatter(
-            x=df['date'],
-            y=df['predicted_price'],
-            mode='lines',
-            name='Predicted Price',
-            line=dict(color='red', width=2)
+    # Handle future predictions where actual data might not exist
+    # Get the latest date with actual data
+    latest_date = df_sorted[df_sorted['actual_price'].notna()]['date'].max()
+    
+    # Split the data into historical and future predictions
+    historical_df = df_sorted[df_sorted['date'] <= latest_date].copy()
+    future_df = df_sorted[df_sorted['date'] > latest_date].copy()
+    
+    # If we have future data, handle it
+    if not future_df.empty:
+        # We have future predictions
+        
+        # Add the main historical predicted price line (including the last point)
+        if not historical_df.empty:
+            fig.add_trace(
+                go.Scatter(
+                    x=historical_df['date'],
+                    y=historical_df['predicted_price'],
+                    mode='lines',
+                    name='Historical Predictions',
+                    line=dict(color='red', width=2)
+                )
+            )
+            
+            # Highlight the last historical prediction with a special color
+            fig.add_trace(
+                go.Scatter(
+                    x=[historical_df['date'].iloc[-1]],
+                    y=[historical_df['predicted_price'].iloc[-1]],
+                    mode='markers',
+                    name='Last Historical Prediction',
+                    marker=dict(
+                        color='purple',
+                        size=10,
+                        line=dict(width=2, color='black')
+                    )
+                )
+            )
+        
+        # Add future predictions with a different color but connect to the last historical
+        all_predictions = pd.concat([historical_df.iloc[-1:], future_df])
+        
+        fig.add_trace(
+            go.Scatter(
+                x=all_predictions['date'],
+                y=all_predictions['predicted_price'],
+                mode='lines+markers',
+                name='Future Predictions',
+                line=dict(color='darkred', width=2),
+                marker=dict(
+                    color='darkred',
+                    size=10,
+                    line=dict(width=2, color='black')
+                )
+            )
         )
-    )
+    else:
+        # No future predictions, just historical data
+        
+        # If we have at least 2 data points, connect all predictions with a line
+        if len(historical_df) > 1:
+            # Add the complete prediction line
+            fig.add_trace(
+                go.Scatter(
+                    x=historical_df['date'],
+                    y=historical_df['predicted_price'],
+                    mode='lines',
+                    name='Historical Predictions',
+                    line=dict(color='red', width=2)
+                )
+            )
+            
+            # Add yellow line segment between previous prediction and latest prediction
+            if len(historical_df) > 1:
+                fig.add_trace(
+                    go.Scatter(
+                        x=[historical_df['date'].iloc[-2], historical_df['date'].iloc[-1]],
+                        y=[historical_df['predicted_price'].iloc[-2], historical_df['predicted_price'].iloc[-1]],
+                        mode='lines',
+                        name='Latest Prediction',
+                        line=dict(color='yellow', width=4)
+                    )
+                )
+        else:
+            # If we only have one data point
+            fig.add_trace(
+                go.Scatter(
+                    x=historical_df['date'],
+                    y=historical_df['predicted_price'],
+                    mode='markers',
+                    name='Latest Prediction',
+                    marker=dict(color='darkred', size=12)
+                )
+            )
     
     # Calculate and add rolling average of actual price
     if len(df) >= window_size:
-        df['rolling_avg'] = df['actual_price'].rolling(window=window_size).mean()
+        # Use the same df without the last point for the rolling average
+        actual_display_df['rolling_avg'] = actual_display_df['actual_price'].rolling(window=window_size).mean()
         fig.add_trace(
             go.Scatter(
-                x=df['date'],
-                y=df['rolling_avg'],
+                x=actual_display_df['date'],
+                y=actual_display_df['rolling_avg'],
                 mode='lines',
                 name=f'{window_size}-Day Rolling Avg',
                 line=dict(color='green', width=1.5, dash='dash')
