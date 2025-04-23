@@ -56,24 +56,15 @@ def stock_prediction_pipeline():
                 print(f"Using specified date range: {start_date.date()} to {end_date.date()}")
             else:
                 end_date = pd.Timestamp(get_execution_date(**context))
-                start_date = end_date - pd.DateOffset(days=7)
+                start_date = end_date
                 print(f"No date range specified, using execution date: {end_date.date()}")
             
             print(f"Fetching stock data from {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}")
             raw_data = download_stock_data(STOCKS, start_date, end_date)
             
-            if not raw_data:
-                print("No stock data found for any symbols. Using most recent available data...")
-                current_date = pd.Timestamp.now()
-                end_date = current_date
-                start_date = end_date - pd.DateOffset(days=7)
-                raw_data = download_stock_data(STOCKS, start_date, end_date)
-            
             if raw_data:
                 print(f"\nSuccessfully downloaded data for {len(raw_data)} out of {len(STOCKS)} stocks")
                 return raw_data
-            else:
-                raise ValueError("Could not download data for any stocks")
                 
         except Exception as e:
             error_msg = f"Failed to extract stock data: {str(e)}"
@@ -93,7 +84,7 @@ def stock_prediction_pipeline():
             else:
                 # Otherwise, use execution date
                 end_date = pd.Timestamp(get_execution_date(**context))
-                start_date = end_date - pd.DateOffset(days=7)
+                start_date = end_date
                 print(f"No date range specified, using execution date: {end_date.date()}")
                 
             print(f"Fetching economic data from {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}")
@@ -115,7 +106,7 @@ def stock_prediction_pipeline():
                 print(f"Using specified date range: {start_date.date()} to {end_date.date()}")
             else:
                 end_date = pd.Timestamp(get_execution_date(**context))
-                start_date = end_date - pd.DateOffset(days=7)
+                start_date = end_date
                 print(f"No date range specified, using execution date: {end_date.date()}")
             
             print(f"Extracting articles for period: {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}")

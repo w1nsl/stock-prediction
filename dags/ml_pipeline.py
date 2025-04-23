@@ -589,6 +589,10 @@ def save_predictions_to_db(predictions: pd.DataFrame, table_name: str = "stock_p
         else:
             print(f"Table {table_name} already exists, skipping creation")
         
+        # Add 1 day to prediction dates since predictions are for the next day
+        predictions_copy = predictions.copy()
+        predictions_copy['date'] = pd.to_datetime(predictions_copy['date']) + pd.Timedelta(days=1)
+        
         # Prepare records for batch insert
         records = [
             (
@@ -597,7 +601,7 @@ def save_predictions_to_db(predictions: pd.DataFrame, table_name: str = "stock_p
                 row['prediction'],
                 row['prediction_date']
             )
-            for _, row in predictions.iterrows()
+            for _, row in predictions_copy.iterrows()
         ]
         
         # Insert data using batch execution
