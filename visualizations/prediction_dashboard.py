@@ -7,6 +7,9 @@ import plotly.graph_objects as go
 import plotly.express as px
 import sys
 
+# Import streamlit-compatible plotting utilities
+from visualizations.streamlit_imports import show_pyplot
+
 # Add the parent directory to the path so we can import from visualizations
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 

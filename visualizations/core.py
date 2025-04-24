@@ -1,16 +1,21 @@
 import pandas as pd
+import os
+
+# Configure matplotlib properly for non-GUI environments like Streamlit Cloud
+import matplotlib
+matplotlib.use('Agg')  # Must be called before pyplot
 import matplotlib.pyplot as plt
+
 import seaborn as sns
 import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
 import numpy as np
-import os
 from dotenv import load_dotenv
 import psycopg2
-from datetime import datetime, timedelta
+from sqlalchemy import create_engine
+from typing import Dict, List, Tuple, Optional, Union
 import joblib
-from typing import List, Dict, Tuple, Optional, Union, Any
 import io
 import base64
 
@@ -355,7 +360,7 @@ def plot_sentiment_analysis(df, stock_symbol):
 # 3. Economic Indicators Correlation Heatmap
 def plot_correlation_heatmap(df, stock_symbol=None):
     """
-    Create a correlation heatmap of stock prices, sentiment, and economic indicators
+    Create a heatmap of correlations between stock price, sentiment, and economic indicators
     
     Args:
         df: DataFrame containing merged data
@@ -398,6 +403,7 @@ def plot_correlation_heatmap(df, stock_symbol=None):
     ax.set_title(title, fontsize=14)
     plt.tight_layout()
     
+    # No plt.show() - we'll return the figure for st.pyplot() to use
     return fig
 
 # 4. Combined Economic Indicators Dashboard
@@ -742,6 +748,43 @@ def load_feature_importance() -> Dict[str, pd.DataFrame]:
         'lightgbm': lgbm_importance
     }
 
+def generate_stock_visualizations(stock_symbol, start_date=None, end_date=None):
+    """
+    Generate and save various visualizations for a specific stock
+    
+    Args:
+        stock_symbol: Stock ticker symbol
+        start_date: Start date in 'YYYY-MM-DD' format (optional)
+        end_date: End date in 'YYYY-MM-DD' format (optional)
+    """
+    # Load data
+    df = load_data_from_db(stock_symbol, start_date, end_date)
+    
+    if not df.empty:
+        
+        # Create output directory if it doesn't exist
+        os.makedirs("visualizations/static", exist_ok=True)
+        
+        # Create and save visualizations
+        # 1. Candlestick chart
+        candlestick_fig = plot_stock_candlestick(df, stock_symbol)
+        candlestick_fig.write_html(f"visualizations/static/{stock_symbol}_candlestick.html")
+        
+        # 2. Sentiment analysis visualization
+        sentiment_fig = plot_sentiment_analysis(df, stock_symbol)
+        sentiment_fig.write_html(f"visualizations/static/{stock_symbol}_sentiment.html")
+        
+        # 3. Correlation heatmap
+        corr_fig = plot_correlation_heatmap(df, stock_symbol)
+        # Save figure using the object directly instead of plt.savefig
+        corr_fig.savefig(f"visualizations/static/{stock_symbol}_correlation.png")
+        
+        # 4. Economic dashboard
+        econ_fig = plot_economic_dashboard(df, stock_symbol)
+        econ_fig.write_html(f"visualizations/static/{stock_symbol}_economic.html")
+        
+        print("Visualizations created successfully!")
+
 if __name__ == "__main__":
     # Example usage
     stock_symbol = 'AAPL'
@@ -771,7 +814,8 @@ if __name__ == "__main__":
         
         # 3. Correlation heatmap
         corr_fig = plot_correlation_heatmap(df, stock_symbol)
-        plt.savefig(f"visualizations/static/{stock_symbol}_correlation.png")
+        # Save figure using the object directly instead of plt.savefig
+        corr_fig.savefig(f"visualizations/static/{stock_symbol}_correlation.png")
         
         # 4. Economic dashboard
         econ_fig = plot_economic_dashboard(df, stock_symbol)
