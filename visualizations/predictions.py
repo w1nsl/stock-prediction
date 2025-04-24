@@ -101,30 +101,85 @@ def load_predictions(stock_symbol, start_date=None, end_date=None):
         DataFrame with date, stock_symbol, predicted_price, and actual_price columns
     """
     try:
+        # Get a database connection (either from streamlit secrets or env vars)
         conn = get_db_connection()
         
-        # Adjusted query to use 'prediction' column instead of 'predicted_price'
-        query = """
-        SELECT p.date, p.stock_symbol, p.prediction as predicted_price, m.close_price as actual_price
-        FROM stock_predictions p
-        JOIN merged_stocks_new m 
-            ON p.date = m.date AND p.stock_symbol = m.stock_symbol
-        WHERE p.stock_symbol = %s
-         AND p.date >= %s AND p.date <= %s ORDER BY p.date
-        """
-        
-        params = [stock_symbol, start_date, end_date]
-        
-        # Load predictions
-        df = pd.read_sql_query(query, conn, params=params)
-        conn.close()
-        
-        if df.empty:
-            print(f"No predictions found for {stock_symbol} between {start_date} and {end_date}")
+        if conn is None:
+            print("Failed to establish database connection")
             return pd.DataFrame()
         
-        print(f"Successfully loaded {len(df)} predictions for {stock_symbol}")
-        return df
+        # Create an SQLAlchemy engine from the psycopg2 connection
+        try:
+            import streamlit as st
+            if hasattr(st, 'secrets') and 'db' in st.secrets:
+                # Use Streamlit secrets
+                db_url = f"postgresql://{st.secrets.db.user}:{st.secrets.db.password}@{st.secrets.db.host}:{st.secrets.db.port}/{st.secrets.db.name}"
+            else:
+                # Use environment variables
+                db_url = f"postgresql://{os.getenv('DB_USER')}:{os.getenv('DB_PASSWORD')}@{os.getenv('DB_HOST')}:{os.getenv('DB_PORT')}/{os.getenv('DB_NAME')}"
+            
+            engine = create_engine(db_url)
+            
+            # Adjusted query to use 'prediction' column instead of 'predicted_price'
+            query = """
+            SELECT p.date, p.stock_symbol, p.prediction as predicted_price, m.close_price as actual_price
+            FROM stock_predictions p
+            JOIN merged_stocks_new m 
+                ON p.date = m.date AND p.stock_symbol = m.stock_symbol
+            WHERE p.stock_symbol = %s
+             AND p.date >= %s AND p.date <= %s ORDER BY p.date
+            """
+            
+            params = [stock_symbol, start_date, end_date]
+            
+            # Use SQLAlchemy for the query
+            with engine.connect() as connection:
+                # Execute the query with parameters
+                query_with_params = text(query).bindparams(
+                    param_1=stock_symbol,
+                    param_2=start_date,
+                    param_3=end_date
+                )
+                df = pd.read_sql(
+                    sql=query.replace("%s", ":param_1").replace("%s", ":param_2").replace("%s", ":param_3"),
+                    con=connection,
+                    params={"param_1": stock_symbol, "param_2": start_date, "param_3": end_date}
+                )
+            
+            # Close the original connection
+            conn.close()
+            
+            if df.empty:
+                print(f"No predictions found for {stock_symbol} between {start_date} and {end_date}")
+                return pd.DataFrame()
+            
+            print(f"Successfully loaded {len(df)} predictions for {stock_symbol}")
+            return df
+        except Exception as e:
+            print(f"Error with SQLAlchemy connection: {e}")
+            
+            # Fallback to psycopg2 if SQLAlchemy fails
+            query = """
+            SELECT p.date, p.stock_symbol, p.prediction as predicted_price, m.close_price as actual_price
+            FROM stock_predictions p
+            JOIN merged_stocks_new m 
+                ON p.date = m.date AND p.stock_symbol = m.stock_symbol
+            WHERE p.stock_symbol = %s
+             AND p.date >= %s AND p.date <= %s ORDER BY p.date
+            """
+            
+            params = [stock_symbol, start_date, end_date]
+            
+            # Load predictions with psycopg2
+            df = pd.read_sql_query(query, conn, params=params)
+            conn.close()
+            
+            if df.empty:
+                print(f"No predictions found for {stock_symbol} between {start_date} and {end_date}")
+                return pd.DataFrame()
+            
+            print(f"Successfully loaded {len(df)} predictions for {stock_symbol}")
+            return df
     
     except Exception as e:
         print(f"Error loading prediction data: {e}")
@@ -744,34 +799,80 @@ def load_feature_importance():
 
 def load_model_evaluations():
     """
-    Load model evaluation data from the database
+    Load model evaluations from the database
     
     Returns:
-        DataFrame containing model evaluation metrics
+        DataFrame with model evaluation metrics
     """
     try:
-        # Connect to database
+        # Get a database connection (either from streamlit secrets or env vars)
         conn = get_db_connection()
         
-        # Query to get model evaluations
-        query = """
-        SELECT * FROM model_evaluations
-        ORDER BY training_date DESC
-        """
-        
-        # Load data
-        df = pd.read_sql_query(query, conn, params=[])
-        conn.close()
-        
-        if not df.empty:
-            print(f"Successfully loaded {len(df)} model evaluations from database")
-            return df
-        else:
-            print("No model evaluation data found in database")
+        if conn is None:
+            print("Failed to establish database connection")
             return pd.DataFrame()
+        
+        # Create an SQLAlchemy engine from the psycopg2 connection
+        try:
+            import streamlit as st
+            if hasattr(st, 'secrets') and 'db' in st.secrets:
+                # Use Streamlit secrets
+                db_url = f"postgresql://{st.secrets.db.user}:{st.secrets.db.password}@{st.secrets.db.host}:{st.secrets.db.port}/{st.secrets.db.name}"
+            else:
+                # Use environment variables
+                db_url = f"postgresql://{os.getenv('DB_USER')}:{os.getenv('DB_PASSWORD')}@{os.getenv('DB_HOST')}:{os.getenv('DB_PORT')}/{os.getenv('DB_NAME')}"
             
+            engine = create_engine(db_url)
+            
+            # Modified query to get model evaluation metrics
+            query = """
+            SELECT * FROM model_evaluations 
+            ORDER BY timestamp DESC, model_name, stock_symbol
+            """
+            
+            # Use SQLAlchemy for the query
+            with engine.connect() as connection:
+                df = pd.read_sql(query, connection)
+            
+            # Close the original connection
+            conn.close()
+            
+            if df.empty:
+                print("No model evaluations found in database")
+                return pd.DataFrame()
+            
+            print(f"Successfully loaded {len(df)} model evaluations from database")
+            
+            # Process the data (convert timestamps, calculate averages, etc.)
+            if 'timestamp' in df.columns:
+                df['timestamp'] = pd.to_datetime(df['timestamp'])
+            
+            return df
+        except Exception as e:
+            print(f"Error with SQLAlchemy connection: {e}")
+            
+            # Fallback to psycopg2 if SQLAlchemy fails
+            query = """
+            SELECT * FROM model_evaluations 
+            ORDER BY timestamp DESC, model_name, stock_symbol
+            """
+            
+            df = pd.read_sql_query(query, conn)
+            conn.close()
+            
+            if df.empty:
+                print("No model evaluations found in database")
+                return pd.DataFrame()
+            
+            print(f"Successfully loaded {len(df)} model evaluations from database")
+            
+            # Process the data (convert timestamps, calculate averages, etc.)
+            if 'timestamp' in df.columns:
+                df['timestamp'] = pd.to_datetime(df['timestamp'])
+            
+            return df
     except Exception as e:
-        print(f"Error loading model evaluation data: {e}")
+        print(f"Error loading model evaluations: {e}")
         return pd.DataFrame()
 
 def plot_model_comparison(df):

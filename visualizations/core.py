@@ -27,11 +27,33 @@ except ImportError:
 # Load environment variables
 load_dotenv()
 
-# Database connection
+# Database connection pool
+# Create a global connection pool that can be reused
+_connection_pool = None
+
 def get_db_connection():
-    """Connect to the PostgreSQL database with retry logic"""
+    """Connect to the PostgreSQL database with retry logic and connection pooling"""
+    global _connection_pool
     max_retries = 3
     retry_delay = 2  # seconds
+    
+    # If we already have a connection pool, try to get a connection from it
+    if _connection_pool is not None:
+        try:
+            conn = _connection_pool.getconn()
+            # Test if connection is still valid
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT 1")
+                cursor.fetchone()
+            print("Reusing connection from pool")
+            return conn
+        except Exception as e:
+            print(f"Error reusing connection: {e}, will create new one")
+            # Connection failed, create a new one below
+            try:
+                _connection_pool.putconn(conn)  # Return failed connection to pool
+            except:
+                pass  # Ignore errors returning connection
     
     for attempt in range(max_retries):
         try:
@@ -39,15 +61,25 @@ def get_db_connection():
             import streamlit as st
             if hasattr(st, 'secrets') and 'db' in st.secrets:
                 print(f"Attempt {attempt+1}/{max_retries}: Using Streamlit secrets for database connection")
-                conn = psycopg2.connect(
-                    host=st.secrets.db.host,
-                    database=st.secrets.db.name,
-                    user=st.secrets.db.user,
-                    password=st.secrets.db.password,
-                    port=int(st.secrets.db.port),
-                    sslmode=st.secrets.db.sslmode,
-                    connect_timeout=5  # Reduced timeout to prevent long hangs
-                )
+                from psycopg2 import pool
+                
+                # Create a connection pool if we don't have one
+                if _connection_pool is None:
+                    _connection_pool = pool.ThreadedConnectionPool(
+                        minconn=1, 
+                        maxconn=10,
+                        host=st.secrets.db.host,
+                        database=st.secrets.db.name,
+                        user=st.secrets.db.user,
+                        password=st.secrets.db.password,
+                        port=int(st.secrets.db.port),
+                        sslmode=st.secrets.db.sslmode,
+                        connect_timeout=5  # Reduced timeout to prevent long hangs
+                    )
+                
+                # Get a connection from the pool
+                conn = _connection_pool.getconn()
+                
                 # Test connection with a simple query
                 with conn.cursor() as cursor:
                     cursor.execute("SELECT 1")
@@ -58,15 +90,25 @@ def get_db_connection():
             # Fallback to environment variables (for local development)
             else:
                 print(f"Attempt {attempt+1}/{max_retries}: Using environment variables for database connection")
-                conn = psycopg2.connect(
-                    host=os.getenv('DB_HOST'),
-                    database=os.getenv('DB_NAME'),
-                    user=os.getenv('DB_USER'),
-                    password=os.getenv('DB_PASSWORD'),
-                    port=int(os.getenv('DB_PORT')),
-                    sslmode=os.getenv('DB_SSLMODE'),
-                    connect_timeout=5  # Reduced timeout to prevent long hangs
-                )
+                from psycopg2 import pool
+                
+                # Create a connection pool if we don't have one
+                if _connection_pool is None:
+                    _connection_pool = pool.ThreadedConnectionPool(
+                        minconn=1, 
+                        maxconn=10,
+                        host=os.getenv('DB_HOST'),
+                        database=os.getenv('DB_NAME'),
+                        user=os.getenv('DB_USER'),
+                        password=os.getenv('DB_PASSWORD'),
+                        port=int(os.getenv('DB_PORT')),
+                        sslmode=os.getenv('DB_SSLMODE'),
+                        connect_timeout=5  # Reduced timeout to prevent long hangs
+                    )
+                
+                # Get a connection from the pool
+                conn = _connection_pool.getconn()
+                
                 # Test connection with a simple query
                 with conn.cursor() as cursor:
                     cursor.execute("SELECT 1")
@@ -86,6 +128,17 @@ def get_db_connection():
         except Exception as e:
             print(f"Unexpected error during database connection: {e}")
             raise Exception(f"Database connection error: {e}")
+
+def close_db_connection(conn):
+    """Properly return a connection to the pool"""
+    global _connection_pool
+    if _connection_pool is not None and conn is not None:
+        try:
+            _connection_pool.putconn(conn)
+            return True
+        except Exception as e:
+            print(f"Error returning connection to pool: {e}")
+    return False
 
 def load_data_from_db(stock_symbol=None, start_date=None, end_date=None):
     """
@@ -138,7 +191,8 @@ def load_data_from_db(stock_symbol=None, start_date=None, end_date=None):
         query += " ORDER BY stock_symbol, date"
         
         df = pd.read_sql_query(query, conn, params=params)
-        conn.close()
+        # Return connection to the pool instead of closing it
+        close_db_connection(conn)
         
         if df.empty:
             print(f"Query returned no data for {stock_symbol} from {start_date} to {end_date}")

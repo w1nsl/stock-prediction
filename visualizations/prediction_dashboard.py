@@ -104,7 +104,7 @@ def update_url_params():
 # update_url_params()
 
 # Load data caching
-@st.cache_data(ttl=3600)  # Cache data for 1 hour
+@st.cache_data(ttl=3600, show_spinner=False, max_entries=100)  # Cache data for 1 hour, up to 100 different queries
 def load_cached_predictions(stock, start, end):
     try:
         # Try to load from database
@@ -455,89 +455,55 @@ else:
             - Predictions made during periods with volatility above 0.3 (annualized) typically have higher uncertainty.
             """)
     
-    with tab5:
-        st.header("Model Evaluation Dashboard")
-        st.markdown("""
-        This tab provides comprehensive insights into model performance across different stocks and over time.
-        
-        **Key Features:**
-        - **Performance Summary**: Overall metrics showing model accuracy across all stocks
-        - **Stock Comparison**: Compare how models perform on different stocks to identify strengths and weaknesses
-        - **Time-based Analysis**: Track model improvements and performance trends over time
-        - **Raw Data Access**: View the underlying evaluation data for detailed analysis
-        
-        Use these insights to identify which models are performing best, where improvements are needed, and how model performance evolves over time. This information is valuable for model selection, refinement, and deployment decisions.
-        """)
-        
-        # Load model evaluation data
-        with st.spinner("Loading model evaluation data..."):
+    # Add a caching function for model evaluations
+    @st.cache_data(ttl=3600, show_spinner=False, max_entries=10)
+    def load_cached_model_evaluations():
+        try:
             model_eval_df = load_model_evaluations()
-        
-        if model_eval_df.empty:
-            st.warning("No model evaluation data available in the database.")
-        else:
-            # Show summary metrics
-            st.subheader("Model Performance Summary")
+            if not model_eval_df.empty:
+                return model_eval_df
+            return pd.DataFrame()
+        except Exception as e:
+            st.error(f"Error loading model evaluations: {e}")
+            return pd.DataFrame()
+
+    # Load model evaluations only if tab5 is selected to avoid unnecessary database calls
+    if tab5.id == st.get_current_tab_id():
+        with tab5:
+            st.header("Model Evaluation Overview")
             
-            # Display count of models by stock
-            if 'stock_symbol' in model_eval_df.columns:
-                stock_counts = model_eval_df['stock_symbol'].value_counts()
-                st.write(f"Models for {len(stock_counts)} different stocks")
-                
-            # Display average metrics across all models    
-            if 'rmse' in model_eval_df.columns:
-                avg_rmse = model_eval_df['rmse'].mean()
-                st.metric("Average RMSE", f"{avg_rmse:.4f}")
-                
-            if 'r2' in model_eval_df.columns:
-                avg_r2 = model_eval_df['r2'].mean()
-                st.metric("Average R²", f"{avg_r2:.4f}")
-            
-            # Create sections for different visualizations
-            st.subheader("Model Comparison by Stock")
-            model_comp_fig = plot_model_comparison(model_eval_df)
-            if model_comp_fig:
-                st.plotly_chart(model_comp_fig, use_container_width=True)
-                st.info("""
-                This chart shows model performance metrics across different stocks.
-                Lower RMSE/MAE and higher R² indicate better performing models.
-                """)
-            else:
-                st.warning("Could not create model comparison visualization.")
-            
-            # Only show time series if we have training_date
-            if 'training_date' in model_eval_df.columns:
-                st.subheader("Performance Trends Over Time")
-                time_fig = plot_performance_over_time(model_eval_df)
-                if time_fig:
-                    st.plotly_chart(time_fig, use_container_width=True)
-                    st.info("""
-                    This chart shows how model performance has changed over time.
-                    It helps identify trends and improvements in model accuracy.
-                    """)
+            with st.spinner("Loading model evaluation data..."):
+                try:
+                    model_eval_df = load_cached_model_evaluations()
                     
-                    # Add more detailed interpretation guidance
-                    st.markdown("""
-                    **How to interpret this graph:**
-                    
-                    - **Time Progression**: The x-axis shows model training dates from oldest (left) to newest (right).
-                    - **Multiple Metrics**: Solid lines typically represent accuracy metrics (R²) where higher is better, while dashed lines represent error metrics (RMSE, MAE) where lower is better.
-                    - **Different Stocks**: Each color represents a different stock symbol if multiple stocks are being evaluated.
-                    - **Convergence**: Lines that flatten over time suggest the model is reaching its performance limit.
-                    - **Sudden Changes**: Sharp improvements or degradations can indicate significant model changes or data shifts.
-                    
-                    **What to look for:**
-                    - **Consistent Improvement**: Accuracy metrics should trend upward and error metrics downward over time.
-                    - **Seasonality**: Cyclical patterns in performance may indicate seasonal effects in the market.
-                    - **Diverging Performance**: If some stocks improve while others worsen, it may indicate the model is becoming specialized.
-                    - **Performance Plateaus**: Extended flat periods suggest a need for new features or modeling approaches.
-                    """)
-                else:
-                    st.warning("Could not create performance over time visualization.")
-            
-            # Show raw data in expandable section
-            with st.expander("View Raw Model Evaluation Data"):
-                st.dataframe(model_eval_df)
+                    if model_eval_df.empty:
+                        st.warning("No model evaluation data available.")
+                    else:
+                        # Continue with model evaluation visualizations...
+                        st.success(f"Loaded evaluation data for {model_eval_df['model_name'].nunique()} models")
+                        
+                        # The rest of your model evaluation code...
+                        # Display model comparison chart
+                        st.subheader("Model Performance Comparison")
+                        model_fig = plot_model_comparison(model_eval_df)
+                        st.plotly_chart(model_fig, use_container_width=True)
+                        
+                        # Display performance over time
+                        st.subheader("Model Performance Over Time")
+                        perf_time_fig = plot_performance_over_time(model_eval_df)
+                        st.plotly_chart(perf_time_fig, use_container_width=True)
+                        
+                        # Display raw data table
+                        with st.expander("View Raw Evaluation Data"):
+                            # Format the timestamp for display
+                            display_df = model_eval_df.copy()
+                            if 'timestamp' in display_df.columns:
+                                display_df['timestamp'] = display_df['timestamp'].dt.strftime('%Y-%m-%d %H:%M:%S')
+                            
+                            st.dataframe(display_df.sort_values(['timestamp', 'model_name', 'stock_symbol'], ascending=[False, True, True]))
+                except Exception as e:
+                    st.error(f"Error processing model evaluation data: {e}")
+                    st.info("This may be due to a database connection issue or timeout. Try refreshing the page.")
 
 # Footer
 st.sidebar.markdown("---")
