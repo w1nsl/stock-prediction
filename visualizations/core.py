@@ -365,6 +365,9 @@ def plot_correlation_heatmap(df, stock_symbol=None):
     Args:
         df: DataFrame containing merged data
         stock_symbol: Stock ticker symbol (if None, use all data)
+        
+    Returns:
+        Matplotlib figure object
     """
     if stock_symbol:
         df = df[df['stock_symbol'] == stock_symbol].copy()
@@ -379,8 +382,10 @@ def plot_correlation_heatmap(df, stock_symbol=None):
     # Calculate correlation matrix
     corr = df[cols_to_correlate].corr()
     
-    # Create heatmap
-    fig, ax = plt.subplots(figsize=(12, 10))
+    # Create heatmap - using explicit figure creation as recommended
+    fig = plt.figure(figsize=(12, 10))
+    ax = fig.add_subplot(111)
+    
     mask = np.triu(np.ones_like(corr, dtype=bool))
     
     title = "Correlation Between Stock Price, Sentiment, and Economic Indicators"
@@ -403,7 +408,7 @@ def plot_correlation_heatmap(df, stock_symbol=None):
     ax.set_title(title, fontsize=14)
     plt.tight_layout()
     
-    # No plt.show() - we'll return the figure for st.pyplot() to use
+    # No plt.show() - we return the figure object directly
     return fig
 
 # 4. Combined Economic Indicators Dashboard

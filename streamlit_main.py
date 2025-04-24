@@ -21,6 +21,12 @@ try:
     import matplotlib
     matplotlib.use('Agg')  # Use non-GUI backend which is compatible with Streamlit
     
+    # Explicitly import pyplot to ensure it gets configured properly
+    import matplotlib.pyplot as plt
+    
+    # Check that the backend is configured correctly
+    st.sidebar.write(f"Using matplotlib backend: {matplotlib.get_backend()}")
+    
     # Now add current directory to path
     sys.path.insert(0, os.path.dirname(__file__))
     
