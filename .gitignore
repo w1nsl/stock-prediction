@@ -11,4 +11,18 @@ __pycache__/
 logs/
 scheduler/
 
+# Environment variables and secrets
 .env
+.streamlit/secrets.toml
+
+# Virtual environments
+venv/
+env/
+.venv/
+
+# IDE files
+.idea/
+.vscode/
+
+# Jupyter notebook checkpoints
+.ipynb_checkpoints/

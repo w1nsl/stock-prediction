@@ -13,6 +13,8 @@ import joblib
 from typing import List, Dict, Tuple, Optional, Union, Any
 import io
 import base64
+import time
+from psycopg2 import OperationalError
 
 # Import our direct data loader (with fallback to sample data)
 try:
@@ -27,15 +29,63 @@ load_dotenv()
 
 # Database connection
 def get_db_connection():
-    """Connect to the PostgreSQL database"""
-    return psycopg2.connect(
-        host=os.getenv('DB_HOST'),
-        database=os.getenv('DB_NAME'),
-        user=os.getenv('DB_USER'),
-        password=os.getenv('DB_PASSWORD'),
-        port=int(os.getenv('DB_PORT')),
-        sslmode=os.getenv('DB_SSLMODE')
-    )
+    """Connect to the PostgreSQL database with retry logic"""
+    max_retries = 3
+    retry_delay = 2  # seconds
+    
+    for attempt in range(max_retries):
+        try:
+            # Try to use Streamlit secrets first (for cloud deployment)
+            import streamlit as st
+            if hasattr(st, 'secrets') and 'db' in st.secrets:
+                print(f"Attempt {attempt+1}/{max_retries}: Using Streamlit secrets for database connection")
+                conn = psycopg2.connect(
+                    host=st.secrets.db.host,
+                    database=st.secrets.db.name,
+                    user=st.secrets.db.user,
+                    password=st.secrets.db.password,
+                    port=int(st.secrets.db.port),
+                    sslmode=st.secrets.db.sslmode,
+                    connect_timeout=5  # Reduced timeout to prevent long hangs
+                )
+                # Test connection with a simple query
+                with conn.cursor() as cursor:
+                    cursor.execute("SELECT 1")
+                    cursor.fetchone()
+                print("Database connection successful!")
+                return conn
+            
+            # Fallback to environment variables (for local development)
+            else:
+                print(f"Attempt {attempt+1}/{max_retries}: Using environment variables for database connection")
+                conn = psycopg2.connect(
+                    host=os.getenv('DB_HOST'),
+                    database=os.getenv('DB_NAME'),
+                    user=os.getenv('DB_USER'),
+                    password=os.getenv('DB_PASSWORD'),
+                    port=int(os.getenv('DB_PORT')),
+                    sslmode=os.getenv('DB_SSLMODE'),
+                    connect_timeout=5  # Reduced timeout to prevent long hangs
+                )
+                # Test connection with a simple query
+                with conn.cursor() as cursor:
+                    cursor.execute("SELECT 1")
+                    cursor.fetchone()
+                print("Database connection successful!")
+                return conn
+                
+        except OperationalError as e:
+            print(f"Connection attempt {attempt+1} failed: {e}")
+            if attempt < max_retries - 1:
+                print(f"Retrying in {retry_delay} seconds...")
+                time.sleep(retry_delay)
+                retry_delay *= 2  # Exponential backoff
+            else:
+                print("All connection attempts failed")
+                raise Exception(f"Database connection failed after {max_retries} attempts: {e}")
+        except Exception as e:
+            print(f"Unexpected error during database connection: {e}")
+            raise Exception(f"Database connection error: {e}")
 
 def load_data_from_db(stock_symbol=None, start_date=None, end_date=None):
     """
@@ -67,6 +117,9 @@ def load_data_from_db(stock_symbol=None, start_date=None, end_date=None):
         print("Attempting to load data from database...")
         conn = get_db_connection()
         
+        if conn is None:
+            raise Exception("Failed to establish database connection")
+        
         query = "SELECT * FROM merged_stocks_new WHERE 1=1"
         params = []
         
@@ -87,109 +140,17 @@ def load_data_from_db(stock_symbol=None, start_date=None, end_date=None):
         df = pd.read_sql_query(query, conn, params=params)
         conn.close()
         
+        if df.empty:
+            print(f"Query returned no data for {stock_symbol} from {start_date} to {end_date}")
+        else:
+            print(f"Successfully loaded {len(df)} records from database")
+            
         df.attrs['data_source'] = 'database'  # Mark data source
         return df
     except Exception as e:
         print(f"Error loading data from database: {e}")
-        print("Generating sample data for demonstration")
-        
-        # Generate sample data
-        if start_date is None:
-            start_date = '2023-01-01'
-        if end_date is None:
-            end_date = datetime.now().strftime('%Y-%m-%d')
-            
-        # Create date range
-        dates = pd.date_range(start=start_date, end=end_date)
-        
-        # Default to AAPL if no stock specified
-        if stock_symbol is None:
-            stocks = ['AAPL', 'MSFT', 'GOOG', 'AMZN', 'META']
-        else:
-            stocks = [stock_symbol]
-            
-        # Create sample dataframe
-        rows = []
-        for stock in stocks:
-            # Base price and parameters differ by stock
-            if stock == 'AAPL':
-                base_price = 150
-                volatility = 5
-            elif stock == 'MSFT':
-                base_price = 300
-                volatility = 8
-            elif stock == 'GOOG':
-                base_price = 130
-                volatility = 6
-            elif stock == 'AMZN':
-                base_price = 120
-                volatility = 7
-            else:
-                base_price = 200
-                volatility = 10
-                
-            # Generate stock price data
-            np.random.seed(42 + hash(stock) % 100)  # Different seed per stock
-            price_trend = np.linspace(base_price, base_price * 1.3, len(dates))
-            close_prices = price_trend + np.random.normal(0, volatility, len(dates))
-            
-            for i, date in enumerate(dates):
-                close_price = close_prices[i]
-                open_price = close_price * (1 + np.random.normal(0, 0.01))
-                high_price = max(close_price, open_price) * (1 + abs(np.random.normal(0, 0.01)))
-                low_price = min(close_price, open_price) * (1 - abs(np.random.normal(0, 0.01)))
-                volume = int(np.random.normal(5000000, 2000000))
-                
-                # Generate sentiment data
-                sentiment = np.random.normal(0.1, 0.5)  # Slightly positive bias
-                article_count = int(np.random.poisson(5))  # Random article count
-                positive_ratio = max(0, min(1, 0.5 + sentiment * 0.3))
-                negative_ratio = max(0, min(1, 0.5 - sentiment * 0.3))
-                neutral_ratio = max(0, min(1, 1 - positive_ratio - negative_ratio))
-                
-                # Generate economic data
-                gdp = 23000 + np.random.normal(0, 100)
-                real_gdp = 20000 + np.random.normal(0, 100)
-                unemployment_rate = 3.5 + np.random.normal(0, 0.2)
-                cpi = 300 + np.random.normal(0, 5)
-                fed_funds_rate = 4.5 + np.random.normal(0, 0.1)
-                sp500 = 4200 + np.random.normal(0, 50)
-                
-                rows.append({
-                    'date': date.date(),
-                    'stock_symbol': stock,
-                    'open_price': open_price,
-                    'high_price': high_price,
-                    'low_price': low_price,
-                    'close_price': close_price,
-                    'adj_close': close_price,
-                    'volume': volume,
-                    'daily_sentiment': sentiment,
-                    'article_count': article_count,
-                    'sentiment_std': abs(np.random.normal(0, 0.2)),
-                    'positive_ratio': positive_ratio,
-                    'negative_ratio': negative_ratio,
-                    'neutral_ratio': neutral_ratio,
-                    'sentiment_median': sentiment + np.random.normal(0, 0.1),
-                    'sentiment_min': sentiment - abs(np.random.normal(0, 0.3)),
-                    'sentiment_max': sentiment + abs(np.random.normal(0, 0.3)),
-                    'sentiment_range': abs(np.random.normal(0, 0.6)),
-                    'gdp': gdp,
-                    'real_gdp': real_gdp,
-                    'unemployment_rate': unemployment_rate,
-                    'cpi': cpi,
-                    'fed_funds_rate': fed_funds_rate,
-                    'sp500': sp500
-                })
-                
-        df = pd.DataFrame(rows)
-        if stock_symbol:
-            df = df[df['stock_symbol'] == stock_symbol]
-        
-        # Mark as sample data
-        df.attrs['data_source'] = 'sample'
-            
-        return df
+        # Raise the exception instead of generating sample data
+        raise Exception(f"Failed to load data: {e}")
 
 # 1. Stock Price Candlestick Chart with Volume
 def plot_stock_candlestick(df, stock_symbol, title=None):
