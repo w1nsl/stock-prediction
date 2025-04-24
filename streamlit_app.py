@@ -48,6 +48,7 @@ if not initialized:
 
 # Main app
 def main():
+    # This must be the first Streamlit command
     st.set_page_config(
         page_title="Stock Price Prediction Dashboard",
         page_icon="📈",
@@ -77,9 +78,21 @@ def main():
     
     # If we're here, initialization is complete - import and run the dashboard
     try:
-        # Import the dashboard module and run it
-        import visualizations.prediction_dashboard as dashboard
-        # dashboard module will auto-run when imported
+        # Set environment variable to tell dashboard not to call set_page_config
+        os.environ['SKIP_PAGE_CONFIG'] = 'true'
+        
+        # Import dashboard module selectively to avoid the st.set_page_config conflict
+        # Import specific functions we need instead of entire module
+        from visualizations.prediction_dashboard import load_cached_predictions
+        
+        # Run the dashboard logic manually
+        import visualizations.prediction_dashboard
+        # Remove the set_page_config attribute to prevent it from being called
+        visualizations.prediction_dashboard.st.set_page_config = lambda **kwargs: None
+        
+        # Now import the rest of the module which will run without calling set_page_config
+        import importlib
+        importlib.reload(visualizations.prediction_dashboard)
     except Exception as e:
         st.error(f"Error running dashboard: {str(e)}")
         st.info("Try refreshing the page. If the problem persists, please contact support.")

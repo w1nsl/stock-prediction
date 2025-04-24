@@ -27,12 +27,13 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-# Page config
-st.set_page_config(
-    page_title="Stock Prediction Performance Dashboard",
-    page_icon="📊",
-    layout="wide"
-)
+# Page config - only set if not being called from streamlit_app.py
+if os.environ.get('SKIP_PAGE_CONFIG') != 'true':
+    st.set_page_config(
+        page_title="Stock Prediction Performance Dashboard",
+        page_icon="📊",
+        layout="wide"
+    )
 
 # Get URL parameters
 params = st.query_params
