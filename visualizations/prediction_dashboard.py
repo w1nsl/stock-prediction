@@ -132,6 +132,56 @@ def load_cached_predictions(stock, start, end):
     except Exception as e:
         st.error(f"Error loading predictions from database: {e}")
         st.info("Please check your database connection and credentials.")
+        
+        # Check if we're in a cloud environment
+        is_cloud = any([
+            os.environ.get('DYNO') is not None,  # Heroku
+            os.environ.get('STREAMLIT_SHARING') is not None,  # Streamlit sharing
+            os.environ.get('AWS_LAMBDA_FUNCTION_NAME') is not None,  # AWS
+            os.environ.get('WEBSITE_SITE_NAME') is not None,  # Azure
+            'render' in os.environ.get('RENDER_SERVICE', '').lower(),  # Render
+        ])
+        
+        # In cloud environments, create sample data to allow the app to continue
+        if is_cloud:
+            st.warning("Creating sample data to demonstrate dashboard functionality")
+            # Create sample data
+            dates = pd.date_range(start=start, end=end)
+            base_price = 100
+            
+            # Generate sample prices with some randomness
+            np.random.seed(42)  # For reproducibility
+            
+            actual_prices = [base_price]
+            for i in range(1, len(dates)):
+                # Random walk with drift
+                change = np.random.normal(0.5, 2.0)  # Mean positive drift
+                new_price = max(actual_prices[-1] + change, 50)  # Ensure price doesn't go too low
+                actual_prices.append(new_price)
+            
+            # Generate predictions with some error
+            predicted_prices = []
+            for price in actual_prices:
+                # Add some prediction error
+                error = np.random.normal(0, price * 0.05)  # 5% standard deviation
+                predicted_prices.append(price + error)
+            
+            # Create DataFrame
+            sample_df = pd.DataFrame({
+                'date': dates,
+                'stock_symbol': stock,
+                'actual_price': actual_prices,
+                'predicted_price': predicted_prices
+            })
+            
+            # Calculate error metrics
+            sample_df['error'] = sample_df['actual_price'] - sample_df['predicted_price']
+            sample_df['abs_error'] = abs(sample_df['error'])
+            sample_df['pct_error'] = (sample_df['error'] / sample_df['actual_price']) * 100
+            
+            st.info("Note: Using sample data for demonstration. Connect to a database for real predictions.")
+            return sample_df
+            
         return pd.DataFrame()
 
 # Pre-calculate metrics with caching to avoid recalculation
@@ -175,6 +225,8 @@ with st.spinner("Loading prediction data..."):
 
 if df.empty:
     st.warning("No prediction data found for the selected stock and date range. Please adjust your filters.")
+    # Exit early if no data
+    st.stop()
 else:
     # Calculate metrics
     metrics = get_cached_metrics(df)

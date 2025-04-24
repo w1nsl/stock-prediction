@@ -36,14 +36,17 @@ _min_pool_size = 1
 def get_db_connection():
     """Connect to the PostgreSQL database with retry logic and connection pooling"""
     global _connection_pool
-    max_retries = 3
+    
+    # Get timeout and retry settings from environment
+    connect_timeout = int(os.getenv('DB_CONNECT_TIMEOUT', '5'))
+    max_retries = int(os.getenv('DATABASE_MAX_RETRIES', '3'))
     retry_delay = 2  # seconds
     
     # If we already have a connection pool, try to get a connection from it
     if _connection_pool is not None:
         try:
             conn = _connection_pool.getconn()
-            # Test if connection is still valid
+            # Test if connection is still valid with a timeout
             with conn.cursor() as cursor:
                 cursor.execute("SELECT 1")
                 cursor.fetchone()
@@ -56,6 +59,20 @@ def get_db_connection():
                 _connection_pool.putconn(conn)  # Return failed connection to pool
             except:
                 pass  # Ignore errors returning connection
+    
+    # Check if we're running in a cloud environment
+    is_cloud = any([
+        os.environ.get('DYNO') is not None,  # Heroku
+        os.environ.get('STREAMLIT_SHARING') is not None,  # Streamlit sharing
+        os.environ.get('AWS_LAMBDA_FUNCTION_NAME') is not None,  # AWS
+        os.environ.get('WEBSITE_SITE_NAME') is not None,  # Azure
+        'render' in os.environ.get('RENDER_SERVICE', '').lower(),  # Render
+    ])
+    
+    # Use fewer retries and shorter delay in cloud environments to avoid hanging
+    if is_cloud:
+        max_retries = min(max_retries, 2)  # At most 2 retries in cloud
+        retry_delay = 1  # Shorter delay
     
     for attempt in range(max_retries):
         try:
@@ -76,7 +93,7 @@ def get_db_connection():
                         password=st.secrets.db.password,
                         port=int(st.secrets.db.port),
                         sslmode=st.secrets.db.sslmode,
-                        connect_timeout=5  # Reduced timeout to prevent long hangs
+                        connect_timeout=connect_timeout  # Use environment variable timeout
                     )
                 
                 # Get a connection from the pool
@@ -105,7 +122,7 @@ def get_db_connection():
                         password=os.getenv('DB_PASSWORD'),
                         port=int(os.getenv('DB_PORT')),
                         sslmode=os.getenv('DB_SSLMODE'),
-                        connect_timeout=5  # Reduced timeout to prevent long hangs
+                        connect_timeout=connect_timeout  # Use environment variable timeout
                     )
                 
                 # Get a connection from the pool
@@ -126,9 +143,18 @@ def get_db_connection():
                 retry_delay *= 2  # Exponential backoff
             else:
                 print("All connection attempts failed")
+                # In cloud environments, show a more detailed error
+                if is_cloud:
+                    import streamlit as st
+                    st.error(f"Database connection failed after {max_retries} attempts")
+                    st.info("Please check your database credentials and network connectivity.")
                 raise Exception(f"Database connection failed after {max_retries} attempts: {e}")
         except Exception as e:
             print(f"Unexpected error during database connection: {e}")
+            # In cloud environments, show a more detailed error
+            if is_cloud:
+                import streamlit as st
+                st.error(f"Unexpected database error: {str(e)}")
             raise Exception(f"Database connection error: {e}")
 
 def close_db_connection(conn):
