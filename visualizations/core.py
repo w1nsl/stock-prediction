@@ -1,10 +1,14 @@
 import pandas as pd
 import os
+from threading import RLock
 
 # Configure matplotlib properly for non-GUI environments like Streamlit Cloud
 import matplotlib
-matplotlib.use('Agg')  # Must be called before pyplot
+matplotlib.use('TkAgg')  # Must be called before pyplot
 import matplotlib.pyplot as plt
+
+# Create a lock for thread-safe matplotlib operations
+matplotlib_lock = RLock()
 
 import seaborn as sns
 import plotly.graph_objects as go
@@ -382,31 +386,33 @@ def plot_correlation_heatmap(df, stock_symbol=None):
     # Calculate correlation matrix
     corr = df[cols_to_correlate].corr()
     
-    # Create heatmap - using explicit figure creation as recommended
-    fig = plt.figure(figsize=(12, 10))
-    ax = fig.add_subplot(111)
-    
-    mask = np.triu(np.ones_like(corr, dtype=bool))
-    
-    title = "Correlation Between Stock Price, Sentiment, and Economic Indicators"
-    if stock_symbol:
-        title += f" for {stock_symbol}"
-    
-    sns.heatmap(
-        corr, 
-        mask=mask,
-        annot=True, 
-        fmt=".2f",
-        cmap="coolwarm",
-        vmin=-1, vmax=1,
-        square=True,
-        linewidths=.5,
-        cbar_kws={"shrink": .8},
-        ax=ax
-    )
-    
-    ax.set_title(title, fontsize=14)
-    plt.tight_layout()
+    # Use the matplotlib lock for thread safety
+    with matplotlib_lock:
+        # Create heatmap - using explicit figure creation as recommended
+        fig = plt.figure(figsize=(12, 10))
+        ax = fig.add_subplot(111)
+        
+        mask = np.triu(np.ones_like(corr, dtype=bool))
+        
+        title = "Correlation Between Stock Price, Sentiment, and Economic Indicators"
+        if stock_symbol:
+            title += f" for {stock_symbol}"
+        
+        sns.heatmap(
+            corr, 
+            mask=mask,
+            annot=True, 
+            fmt=".2f",
+            cmap="coolwarm",
+            vmin=-1, vmax=1,
+            square=True,
+            linewidths=.5,
+            cbar_kws={"shrink": .8},
+            ax=ax
+        )
+        
+        ax.set_title(title, fontsize=14)
+        plt.tight_layout()
     
     # No plt.show() - we return the figure object directly
     return fig
