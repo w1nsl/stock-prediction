@@ -1,15 +1,15 @@
 import os
 import sys
-import subprocess
-import signal
-import platform
 import time
+import threading
 import streamlit as st
 
 # Add the current directory to the path so we can import from subdirectories
 sys.path.insert(0, os.path.dirname(__file__))
 
-# Check if we're in a cloud deployment
+# Global variable to track initialization
+initialized = False
+
 def is_cloud_deployment():
     # Look for environment variables commonly set in cloud environments
     return any([
@@ -20,50 +20,74 @@ def is_cloud_deployment():
         'render' in os.environ.get('RENDER_SERVICE', '').lower(),  # Render
     ])
 
-# Check if running in a cloud environment
-is_cloud = is_cloud_deployment()
-
-if is_cloud:
-    # In cloud environments, import the dashboard directly
-    # This avoids subprocess issues in some cloud environments
+def initialize_app_in_background():
+    """Initialize the app in a background thread to not block health checks"""
+    global initialized
     try:
-        # Set a timeout for database connections
-        os.environ['DB_CONNECT_TIMEOUT'] = '10'  # 10 seconds
-        os.environ['DATABASE_MAX_RETRIES'] = '2'  # Only try 2 times
+        # Set timeouts for database connections
+        os.environ['DB_CONNECT_TIMEOUT'] = '5'  # 5 seconds
+        os.environ['DATABASE_MAX_RETRIES'] = '1'  # Only try once
         
-        # Import the dashboard module (it will run automatically)
-        st.spinner("Starting dashboard (cloud mode)...")
-        from visualizations.prediction_dashboard import *
+        # Import here to delay loading until after health check passes
+        from visualizations.predictions import load_predictions
+        
+        # Mark as initialized
+        initialized = True
     except Exception as e:
-        st.error(f"Error initializing dashboard: {str(e)}")
-        st.info("If you're experiencing database connection issues, please check your database credentials and network connectivity.")
-        
-        # Show detailed error for debugging
+        st.error(f"Error initializing app: {str(e)}")
         import traceback
-        st.code(traceback.format_exc())
-else:
-    # For local environments, use the subprocess approach
-    def run_prediction_dashboard():
-        """Run the prediction dashboard as a separate process"""
-        script_path = os.path.join(os.path.dirname(__file__), "visualizations", "prediction_dashboard.py")
-        
-        # Add additional environment variables
-        env = os.environ.copy()
-        env['DB_CONNECT_TIMEOUT'] = '10'  # 10 seconds
-        
-        # Build command
-        cmd = ["streamlit", "run", script_path]
-        
-        # Run the command
-        process = subprocess.Popen(cmd, env=env)
-        
-        try:
-            # Wait for the process to complete
-            process.wait()
-        except KeyboardInterrupt:
-            # Handle Ctrl+C gracefully
-            process.send_signal(signal.SIGINT)
-            process.wait()
+        with open("error_log.txt", "w") as f:
+            f.write(traceback.format_exc())
+        initialized = "error"
 
-    if __name__ == "__main__":
-        run_prediction_dashboard() 
+# Start initialization in background
+if not initialized:
+    init_thread = threading.Thread(target=initialize_app_in_background)
+    init_thread.daemon = True
+    init_thread.start()
+
+# Main app
+def main():
+    st.set_page_config(
+        page_title="Stock Price Prediction Dashboard",
+        page_icon="📈",
+        layout="wide"
+    )
+    
+    # Header
+    st.title("Stock Price Prediction Dashboard")
+    
+    # Show a spinner while initializing
+    if initialized == False:
+        st.info("Dashboard is initializing, please wait...")
+        st.spinner("Loading dependencies and connecting to database...")
+        # Add a placeholder that will be replaced when initialization is complete
+        placeholder = st.empty()
+        for i in range(10):  # Try for about 10 seconds
+            if initialized:
+                break
+            time.sleep(1)
+            placeholder.text(f"Still initializing... ({i+1}s)")
+        
+        if not initialized or initialized == "error":
+            st.warning("Dashboard initialization is taking longer than expected.")
+            st.info("You can continue waiting or refresh the page.")
+            st.write("If problems persist, check the database connection.")
+            return
+    
+    # If we're here, initialization is complete - import and run the dashboard
+    try:
+        # Import the dashboard module and run it
+        import visualizations.prediction_dashboard as dashboard
+        # dashboard module will auto-run when imported
+    except Exception as e:
+        st.error(f"Error running dashboard: {str(e)}")
+        st.info("Try refreshing the page. If the problem persists, please contact support.")
+        
+        # Show detailed error only in development environment
+        if not is_cloud_deployment():
+            import traceback
+            st.code(traceback.format_exc())
+
+if __name__ == "__main__":
+    main() 
