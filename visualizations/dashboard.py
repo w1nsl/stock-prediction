@@ -202,7 +202,7 @@ else:
         
         # Display correlation heatmap
         corr_plt = plot_correlation_heatmap(df, selected_stock)
-        st.plotly_chart(corr_plt, use_container_width=True)
+        st.pyplot(corr_plt)
         
         # Feature selection for detailed correlation
         st.subheader("Detailed Correlation Analysis")
