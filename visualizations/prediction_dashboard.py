@@ -41,11 +41,17 @@ This dashboard analyzes the performance of stock price predictions, showing comp
 error analysis, and model performance metrics.
 """)
 
+# Add loading overlay
+loading_state = st.empty()
+
 # Sidebar filters
 st.sidebar.header("Filters")
 
 # Add debug mode toggle
 debug_mode = st.sidebar.checkbox("Debug Mode", value=False)
+
+# Add performance mode toggle to disable expensive operations
+performance_mode = st.sidebar.checkbox("Performance Mode (Faster Loading)", value=True)
 
 # Stock selection with URL parameter support
 default_stocks_str = params.get("stock_symbols", ["GOOG,AMD,COST,PYPL,QCOM,ADBE,PEP,CMCSA,INTC,SBUX"])[0]
@@ -102,24 +108,100 @@ def update_url_params():
 
 # Load data caching
 @st.cache_data(ttl=3600)  # Cache data for 1 hour
-def load_cached_predictions(stock, start, end):
+def load_cached_predictions(stock_symbol, start_date, end_date):
+    """Load stock predictions with timeout handling and fallback to sample data"""
     try:
-        # Try to load from database
-        df = load_predictions(stock_symbol=stock, start_date=start, end_date=end)
+        # Using threading for timeout (compatible with Windows)
+        import threading
+        import queue
         
-        # If we got data back, return it
-        if not df.empty:
-            st.success(f"Successfully loaded prediction data from database")
-            return df
-            
-        # If no data was found, return empty DataFrame
-        st.error(f"No predictions found in database for {stock} between {start} and {end}")
-        st.info("Please check your database connection or try a different stock/date range.")
-        return pd.DataFrame()
+        def load_with_timeout(result_queue):
+            try:
+                df = load_predictions(stock_symbol=stock_symbol, start_date=start_date, end_date=end_date)
+                result_queue.put(("success", df))
+            except Exception as e:
+                result_queue.put(("error", str(e)))
+        
+        # Create a queue for the result
+        result_queue = queue.Queue()
+        
+        # Start the data loading in a separate thread
+        thread = threading.Thread(target=load_with_timeout, args=(result_queue,))
+        thread.daemon = True  # The thread will exit when the main program exits
+        thread.start()
+        
+        # Wait for the thread to complete, with a timeout
+        thread.join(timeout=8)  # 8 second timeout
+        
+        # Check if we have a result
+        if not result_queue.empty():
+            status, result = result_queue.get()
+            if status == "success" and not result.empty():
+                st.success(f"Successfully loaded prediction data from database")
+                return result
+            elif status == "error":
+                st.error(f"Database error: {result}")
+                # Fall through to sample data generation
+            else:
+                st.warning("Database returned empty results.")
+                # Fall through to sample data generation
+        else:
+            st.error("Database connection timed out. Using sample data instead.")
+        
+        # If we get here, generate sample data
+        st.warning("Generating sample data for demonstration purposes.")
+        return generate_sample_predictions(stock_symbol, start_date, end_date)
+        
     except Exception as e:
-        st.error(f"Error loading predictions from database: {e}")
-        st.info("Please check your database connection and credentials.")
-        return pd.DataFrame()
+        st.error(f"Error processing predictions: {str(e)}")
+        return generate_sample_predictions(stock_symbol, start_date, end_date)
+
+def generate_sample_predictions(stock_symbol, start_date, end_date):
+    """Generate sample prediction data for demonstration"""
+    import numpy as np
+    
+    # Create date range
+    start = pd.to_datetime(start_date)
+    end = pd.to_datetime(end_date)
+    dates = pd.date_range(start=start, end=end, freq='B')  # Business days
+    
+    # Base price depends on stock symbol
+    if stock_symbol == 'AAPL':
+        base_price = 150
+    elif stock_symbol == 'MSFT':
+        base_price = 300
+    elif stock_symbol == 'GOOG':
+        base_price = 130
+    else:
+        # Use hash of stock symbol to get a consistent base price
+        import hashlib
+        hash_object = hashlib.md5(stock_symbol.encode())
+        base_price = int(hash_object.hexdigest(), 16) % 300 + 50  # Range 50-350
+    
+    # Generate sample data
+    np.random.seed(42)  # For reproducibility
+    rows = []
+    
+    # Create a price trend with some noise
+    price_trend = np.linspace(base_price, base_price * 1.3, len(dates))
+    actual_prices = price_trend + np.random.normal(0, base_price * 0.05, len(dates))
+    
+    # Create predictions with some error
+    for i, date in enumerate(dates):
+        actual_price = actual_prices[i]
+        
+        # Previous day prediction error (random)
+        prediction_error = np.random.normal(0, base_price * 0.03)
+        predicted_price = actual_price + prediction_error
+        
+        rows.append({
+            'date': date,
+            'stock_symbol': stock_symbol,
+            'predicted_price': predicted_price,
+            'actual_price': actual_price
+        })
+    
+    return pd.DataFrame(rows)
 
 with st.spinner("Loading prediction data..."):
     df = load_cached_predictions(stock_symbol=selected_stock, start_date=start_date_str, end_date=end_date_str)
