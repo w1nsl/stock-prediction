@@ -4,7 +4,6 @@ Main entry point for the dashboard with proper matplotlib configuration
 import streamlit as st
 import os
 import sys
-from threading import RLock
 
 # Configure page
 st.set_page_config(
@@ -17,23 +16,18 @@ st.set_page_config(
 # Set matplotlib backend before any other imports
 os.environ['MPLBACKEND'] = 'Agg'
 
-# Create a global lock for matplotlib operations
-matplotlib_lock = RLock()
-
 try:
     # Configure matplotlib properly
     import matplotlib
     matplotlib.use('Agg')  # Use Agg backend which is compatible with Streamlit Cloud
     import matplotlib.pyplot as plt
     
-    # Create a wrapper for st.pyplot that uses the lock
-    def pyplot_with_lock(fig=None, **kwargs):
-        with matplotlib_lock:
-            return st.pyplot(fig, **kwargs)
+    # Set non-interactive mode explicitly
+    plt.ioff()
     
-    # Replace the standard st.pyplot with our locked version
-    st._pyplot = st.pyplot
-    st.pyplot = pyplot_with_lock
+    # Configure matplotlib for streamlit
+    plt.rcParams['figure.figsize'] = (10, 6)
+    plt.rcParams['figure.dpi'] = 100
     
     # Now add current directory to path
     sys.path.insert(0, os.path.dirname(__file__))

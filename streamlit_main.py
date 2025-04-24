@@ -4,7 +4,6 @@ Main Streamlit entry point with proper configuration for Streamlit Cloud
 import streamlit as st
 import os
 import sys
-from threading import RLock
 
 # Configure page
 st.set_page_config(
@@ -14,11 +13,8 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Set matplotlib backend before any other imports - use Agg instead of TkAgg
+# Set matplotlib backend before any other imports - use Agg for headless environments
 os.environ['MPLBACKEND'] = 'Agg'
-
-# Create a global lock for matplotlib operations
-matplotlib_lock = RLock()
 
 try:
     # Force matplotlib configuration
@@ -28,20 +24,18 @@ try:
     # Explicitly import pyplot to ensure it gets configured properly
     import matplotlib.pyplot as plt
     
+    # Set non-interactive mode explicitly
+    plt.ioff()
+    
+    # Configure matplotlib for streamlit
+    plt.rcParams['figure.figsize'] = (10, 6)
+    plt.rcParams['figure.dpi'] = 100
+    
     # Check that the backend is configured correctly
     st.sidebar.write(f"Using matplotlib backend: {matplotlib.get_backend()}")
     
     # Now add current directory to path
     sys.path.insert(0, os.path.dirname(__file__))
-    
-    # Create a wrapper for st.pyplot that uses the lock
-    def pyplot_with_lock(fig=None, **kwargs):
-        with matplotlib_lock:
-            return st.pyplot(fig, **kwargs)
-    
-    # Replace the standard st.pyplot with our locked version
-    st._pyplot = st.pyplot
-    st.pyplot = pyplot_with_lock
     
     # Import the actual dashboard with the correct environment set up
     from visualizations import prediction_dashboard
