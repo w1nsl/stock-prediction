@@ -14,8 +14,8 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Set matplotlib backend before any other imports - use TkAgg instead of Agg
-os.environ['MPLBACKEND'] = 'TkAgg'
+# Set matplotlib backend before any other imports - use Agg instead of TkAgg
+os.environ['MPLBACKEND'] = 'Agg'
 
 # Create a global lock for matplotlib operations
 matplotlib_lock = RLock()
@@ -23,7 +23,7 @@ matplotlib_lock = RLock()
 try:
     # Force matplotlib configuration
     import matplotlib
-    matplotlib.use('TkAgg')  # Use TkAgg backend which is more compatible with Streamlit
+    matplotlib.use('Agg')  # Use Agg backend which is compatible with Streamlit Cloud (no GUI required)
     
     # Explicitly import pyplot to ensure it gets configured properly
     import matplotlib.pyplot as plt
