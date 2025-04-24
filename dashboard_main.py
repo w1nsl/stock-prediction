@@ -15,7 +15,7 @@ st.set_page_config(
 )
 
 # Set matplotlib backend before any other imports
-os.environ['MPLBACKEND'] = 'TkAgg'
+os.environ['MPLBACKEND'] = 'Agg'
 
 # Create a global lock for matplotlib operations
 matplotlib_lock = RLock()
@@ -23,7 +23,7 @@ matplotlib_lock = RLock()
 try:
     # Configure matplotlib properly
     import matplotlib
-    matplotlib.use('TkAgg')  # Use TkAgg backend which is compatible with Streamlit
+    matplotlib.use('Agg')  # Use Agg backend which is compatible with Streamlit Cloud
     import matplotlib.pyplot as plt
     
     # Create a wrapper for st.pyplot that uses the lock

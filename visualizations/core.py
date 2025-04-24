@@ -4,7 +4,7 @@ from threading import RLock
 
 # Configure matplotlib properly for non-GUI environments like Streamlit Cloud
 import matplotlib
-matplotlib.use('TkAgg')  # Must be called before pyplot
+matplotlib.use('Agg')  # Must be called before pyplot
 import matplotlib.pyplot as plt
 
 # Create a lock for thread-safe matplotlib operations
