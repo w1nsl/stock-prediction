@@ -30,6 +30,8 @@ load_dotenv()
 # Database connection pool
 # Create a global connection pool that can be reused
 _connection_pool = None
+_max_pool_size = 10
+_min_pool_size = 1
 
 def get_db_connection():
     """Connect to the PostgreSQL database with retry logic and connection pooling"""
@@ -66,8 +68,8 @@ def get_db_connection():
                 # Create a connection pool if we don't have one
                 if _connection_pool is None:
                     _connection_pool = pool.ThreadedConnectionPool(
-                        minconn=1, 
-                        maxconn=10,
+                        minconn=_min_pool_size, 
+                        maxconn=_max_pool_size,
                         host=st.secrets.db.host,
                         database=st.secrets.db.name,
                         user=st.secrets.db.user,
@@ -95,8 +97,8 @@ def get_db_connection():
                 # Create a connection pool if we don't have one
                 if _connection_pool is None:
                     _connection_pool = pool.ThreadedConnectionPool(
-                        minconn=1, 
-                        maxconn=10,
+                        minconn=_min_pool_size, 
+                        maxconn=_max_pool_size,
                         host=os.getenv('DB_HOST'),
                         database=os.getenv('DB_NAME'),
                         user=os.getenv('DB_USER'),
@@ -139,6 +141,20 @@ def close_db_connection(conn):
         except Exception as e:
             print(f"Error returning connection to pool: {e}")
     return False
+
+# Function to ensure connections are closed properly within a context
+def with_db_connection(func):
+    """Decorator to ensure DB connections are properly closed after use"""
+    def wrapper(*args, **kwargs):
+        conn = None
+        try:
+            conn = get_db_connection()
+            result = func(conn, *args, **kwargs)
+            return result
+        finally:
+            if conn is not None:
+                close_db_connection(conn)
+    return wrapper
 
 def load_data_from_db(stock_symbol=None, start_date=None, end_date=None):
     """
@@ -198,7 +214,7 @@ def load_data_from_db(stock_symbol=None, start_date=None, end_date=None):
             print(f"Query returned no data for {stock_symbol} from {start_date} to {end_date}")
         else:
             print(f"Successfully loaded {len(df)} records from database")
-            
+        
         df.attrs['data_source'] = 'database'  # Mark data source
         return df
     except Exception as e:

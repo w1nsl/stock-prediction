@@ -108,11 +108,21 @@ def update_url_params():
 def load_cached_predictions(stock, start, end):
     try:
         # Try to load from database
-        df = load_predictions(stock_symbol=stock, start_date=start, end_date=end)
+        with st.spinner(f"Loading data for {stock}..."):
+            df = load_predictions(stock_symbol=stock, start_date=start, end_date=end)
         
         # If we got data back, return it
         if not df.empty:
             st.success(f"Successfully loaded prediction data from database")
+            # Pre-calculate derived columns to avoid repeated calculations
+            df['error'] = df['actual_price'] - df['predicted_price']
+            df['abs_error'] = abs(df['error'])
+            df['pct_error'] = (df['error'] / df['actual_price']) * 100
+            
+            # Ensure date is datetime
+            if not pd.api.types.is_datetime64_any_dtype(df['date']):
+                df['date'] = pd.to_datetime(df['date'])
+                
             return df
             
         # If no data was found, return empty DataFrame
@@ -124,6 +134,42 @@ def load_cached_predictions(stock, start, end):
         st.info("Please check your database connection and credentials.")
         return pd.DataFrame()
 
+# Pre-calculate metrics with caching to avoid recalculation
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_cached_metrics(df):
+    if df.empty:
+        return {}
+    return calculate_metrics(df)
+
+# Cache period filtering to avoid repeated filtering operations
+@st.cache_data(ttl=3600, show_spinner=False)
+def filter_period_data(df, period, end_date):
+    if df.empty:
+        return pd.DataFrame()
+        
+    # Create a copy to avoid modifying the original
+    period_df = df.copy()
+    
+    # Make sure the date column is in datetime format for comparison
+    if not pd.api.types.is_datetime64_any_dtype(period_df['date']):
+        period_df['date'] = pd.to_datetime(period_df['date'])
+    
+    # Convert end_date to datetime for comparison
+    end_datetime = pd.to_datetime(end_date)
+    
+    # Filter based on period
+    if period == "Last Month":
+        cutoff_date = end_datetime - timedelta(days=30)
+        return period_df[period_df['date'] >= cutoff_date]
+    elif period == "Last Quarter":
+        cutoff_date = end_datetime - timedelta(days=90)
+        return period_df[period_df['date'] >= cutoff_date]
+    elif period == "Last 6 Months":
+        cutoff_date = end_datetime - timedelta(days=180)
+        return period_df[period_df['date'] >= cutoff_date]
+    else:  # "Full Period"
+        return period_df
+
 with st.spinner("Loading prediction data..."):
     df = load_cached_predictions(selected_stock, start_date_str, end_date_str)
 
@@ -131,7 +177,7 @@ if df.empty:
     st.warning("No prediction data found for the selected stock and date range. Please adjust your filters.")
 else:
     # Calculate metrics
-    metrics = calculate_metrics(df)
+    metrics = get_cached_metrics(df)
     
     # Main dashboard content
     st.sidebar.success(f"Loaded {len(df)} prediction data points for {selected_stock}")
@@ -147,12 +193,12 @@ else:
     cols[4].metric("Direction Accuracy", f"{metrics['Direction Accuracy']:.2f}%")
     
     # Tabs for different visualizations
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    tab1, tab2, tab3, tab4 = st.tabs([
         "Price Comparison", "Error Analysis", 
-        "Error Distribution", "Advanced Analysis", 
-        "Model Evaluation"
+        "Error Distribution", "Advanced Analysis"
     ])
     
+    # Tab 1 - Price Comparison
     with tab1:
         st.header(f"{selected_stock} - Actual vs. Predicted Prices")
         
@@ -181,33 +227,16 @@ else:
         period_options = ["Full Period", "Last Month", "Last Quarter", "Last 6 Months"]
         selected_period = st.selectbox("Select Period", period_options)
         
-        # Filter data based on period
-        period_df = df.copy()
-        
-        # Make sure the date column is in datetime format for comparison
-        if not pd.api.types.is_datetime64_any_dtype(period_df['date']):
-            period_df['date'] = pd.to_datetime(period_df['date'])
-        
-        # Convert end_date to datetime for comparison
-        end_datetime = pd.to_datetime(end_date)
-        
-        if selected_period == "Last Month":
-            cutoff_date = end_datetime - timedelta(days=30)
-            period_df = period_df[period_df['date'] >= cutoff_date]
-        elif selected_period == "Last Quarter":
-            cutoff_date = end_datetime - timedelta(days=90)
-            period_df = period_df[period_df['date'] >= cutoff_date]
-        elif selected_period == "Last 6 Months":
-            cutoff_date = end_datetime - timedelta(days=180)
-            period_df = period_df[period_df['date'] >= cutoff_date]
+        # Use cached period filtering
+        period_df = filter_period_data(df, selected_period, end_date)
         
         # Debug information
         st.caption(f"Period: {selected_period}, Data Points: {len(period_df)}")
-        if selected_period != "Full Period":
-            st.caption(f"Cutoff Date: {cutoff_date.strftime('%Y-%m-%d')}, End Date: {end_datetime.strftime('%Y-%m-%d')}")
+        if selected_period != "Full Period" and not period_df.empty:
+            st.caption(f"Cutoff Date: {period_df['date'].min().strftime('%Y-%m-%d')}, End Date: {end_date.strftime('%Y-%m-%d')}")
         
         if len(period_df) > 0:
-            period_metrics = calculate_metrics(period_df)
+            period_metrics = get_cached_metrics(period_df)
             
             # Display period metrics
             period_cols = st.columns(5)
@@ -219,6 +248,7 @@ else:
         else:
             st.warning(f"No data available for the selected period: {selected_period}")
     
+    # Tab 2 - Error Analysis
     with tab2:
         st.header(f"{selected_stock} - Prediction Error Analysis")
         
@@ -244,18 +274,18 @@ else:
         - Correlation between errors and market events
         """)
         
-        # Error analysis chart
-        error_fig = plot_error_analysis(df, selected_stock)
+        # Error analysis chart - add caching
+        @st.cache_data(ttl=3600, show_spinner=True)
+        def get_error_analysis_fig(df, stock):
+            return plot_error_analysis(df, stock)
+            
+        error_fig = get_error_analysis_fig(df, selected_stock)
         st.plotly_chart(error_fig, use_container_width=True)
         
         # Error statistics
         st.subheader("Error Statistics")
         
-        # Calculate basic error statistics
-        df['error'] = df['actual_price'] - df['predicted_price']
-        df['abs_error'] = abs(df['error'])
-        df['pct_error'] = (df['error'] / df['actual_price']) * 100
-        
+        # We don't need to calculate these again as they're now included in the dataframe
         error_stats = {
             "Metric": ["Mean Error", "Mean Absolute Error", "Mean % Error", "Max Overestimation", "Max Underestimation"],
             "Value": [
@@ -289,6 +319,7 @@ else:
             '% Error': '{:.2f}%'
         }), use_container_width=True)
     
+    # Tab 3 - Error Distribution
     with tab3:
         st.header(f"{selected_stock} - Error Distribution Analysis")
         
@@ -313,8 +344,12 @@ else:
         - Multiple peaks (different prediction regimes or market conditions)
         """)
         
-        # Error distribution chart
-        distribution_fig = plot_error_distribution(df, selected_stock)
+        # Error distribution chart - add caching
+        @st.cache_data(ttl=3600, show_spinner=True)
+        def get_error_distribution_fig(df, stock):
+            return plot_error_distribution(df, stock)
+            
+        distribution_fig = get_error_distribution_fig(df, selected_stock)
         st.plotly_chart(distribution_fig, use_container_width=True)
         
         # Error percentiles
@@ -334,39 +369,48 @@ else:
         
         st.table(pd.DataFrame(percentile_data))
         
-        # Error distribution by price range
-        st.subheader("Error by Price Range")
-        
-        # Create price bins - ensure at least 2 bins to avoid ValueError
-        min_price = df['actual_price'].min()
-        max_price = df['actual_price'].max()
-        
-        # Make sure we have enough range to create multiple bins
-        if max_price - min_price < 0.01:
-            # Almost no range, artificially create a range
-            max_price = min_price + 10
-        
-        # Create 5 bins with proper number of labels (one fewer than bin edges)
-        num_bins = 5
-        bin_edges = np.linspace(min_price, max_price, num_bins + 1)
-        bin_labels = [f"${bin_edges[i]:.0f}-${bin_edges[i+1]:.0f}" for i in range(num_bins)]
-        
-        # Create the price_bin column
-        df['price_bin'] = pd.cut(
-            df['actual_price'],
-            bins=bin_edges,
-            labels=bin_labels
-        )
-        
-        # Calculate metrics by price bin - handle case with few or no bins
-        if len(df['price_bin'].dropna().unique()) > 0:
-            bin_metrics = df.groupby('price_bin').agg(
-                mean_error=('error', 'mean'),
-                mean_abs_error=('abs_error', 'mean'),
-                mean_pct_error=('pct_error', 'mean'),
-                count=('error', 'count')
-            ).reset_index()
+        # Error distribution by price range - cache this calculation
+        @st.cache_data(ttl=3600, show_spinner=False)
+        def get_price_bin_metrics(df):
+            # Create price bins - ensure at least 2 bins to avoid ValueError
+            min_price = df['actual_price'].min()
+            max_price = df['actual_price'].max()
             
+            # Make sure we have enough range to create multiple bins
+            if max_price - min_price < 0.01:
+                # Almost no range, artificially create a range
+                max_price = min_price + 10
+            
+            # Create 5 bins with proper number of labels (one fewer than bin edges)
+            num_bins = 5
+            bin_edges = np.linspace(min_price, max_price, num_bins + 1)
+            bin_labels = [f"${bin_edges[i]:.0f}-${bin_edges[i+1]:.0f}" for i in range(num_bins)]
+            
+            # Create a copy to avoid modifying the original
+            df_copy = df.copy()
+            
+            # Create the price_bin column
+            df_copy['price_bin'] = pd.cut(
+                df_copy['actual_price'],
+                bins=bin_edges,
+                labels=bin_labels
+            )
+            
+            # Calculate metrics by price bin
+            if len(df_copy['price_bin'].dropna().unique()) > 0:
+                bin_metrics = df_copy.groupby('price_bin').agg(
+                    mean_error=('error', 'mean'),
+                    mean_abs_error=('abs_error', 'mean'),
+                    mean_pct_error=('pct_error', 'mean'),
+                    count=('error', 'count')
+                ).reset_index()
+                return bin_metrics, True
+            return None, False
+            
+        st.subheader("Error by Price Range")
+        bin_metrics, has_bins = get_price_bin_metrics(df)
+        
+        if has_bins:
             # Create horizontal bar chart for error by price range
             fig = go.Figure()
             
@@ -400,25 +444,55 @@ else:
         else:
             st.warning("Not enough price variation to create meaningful price bins.")
     
+    # Tab 4 - Advanced Analysis
     with tab4:
         st.header("Advanced Performance Analysis")
         
-        # Analysis selection
-        analysis_type = st.radio(
+        # Analysis selection - use session state to avoid recomputation
+        analysis_options = ["Accuracy vs Prediction Horizon", "Performance vs Volatility"]
+        
+        # Initialize session state for analysis type if not present
+        if 'analysis_type' not in st.session_state:
+            st.session_state.analysis_type = analysis_options[0]
+            
+        # Only update the analysis type when radio button changes, avoid recomputation
+        selected_analysis = st.radio(
             "Select Analysis Type",
-            ["Accuracy vs Prediction Horizon", "Performance vs Volatility"],
-            horizontal=True
+            analysis_options,
+            index=analysis_options.index(st.session_state.analysis_type),
+            horizontal=True,
+            key="analysis_radio"
         )
         
-        if analysis_type == "Accuracy vs Prediction Horizon":
+        # Update session state if selection changes
+        if selected_analysis != st.session_state.analysis_type:
+            st.session_state.analysis_type = selected_analysis
+        
+        # Super-cache the entire tab's content based on analysis type, to avoid recalculation
+        @st.cache_data(ttl=3600, show_spinner=True)
+        def get_horizon_tab_content(df, stock, max_days=10):
+            # Pre-generate the figure outside the Streamlit rendering flow
+            horizon_fig = plot_accuracy_vs_horizon(df, stock, max_days=max_days)
+            return horizon_fig
+            
+        @st.cache_data(ttl=3600, show_spinner=True)
+        def get_volatility_tab_content(df, stock, window=20):
+            # Pre-generate the figure outside the Streamlit rendering flow
+            volatility_fig = plot_performance_by_volatility(df, stock, window=window)
+            return volatility_fig
+        
+        if st.session_state.analysis_type == "Accuracy vs Prediction Horizon":
             st.subheader("Prediction Accuracy vs Horizon")
             
             # Configure horizon
-            max_horizon = st.slider("Maximum Prediction Horizon (Days)", 5, 30, 10)
+            # Use a default max_horizon to reduce recomputation, only recalculate when the slider is released
+            max_horizon = st.slider("Maximum Prediction Horizon (Days)", 5, 30, 10, 
+                                   key="horizon_slider", on_change=None)
             
-            # Generate horizon analysis
-            horizon_fig = plot_accuracy_vs_horizon(df, selected_stock, max_days=max_horizon)
-            st.plotly_chart(horizon_fig, use_container_width=True)
+            # Show spinner manually to avoid issues with caching
+            with st.spinner("Calculating horizon analysis..."):
+                horizon_fig = get_horizon_tab_content(df, selected_stock, max_horizon)
+                st.plotly_chart(horizon_fig, use_container_width=True)
             
             st.info("""
             This analysis shows how the model performs when making predictions for different time horizons. 
@@ -429,11 +503,14 @@ else:
             st.subheader("Prediction Performance vs Market Volatility")
             
             # Configure volatility window
-            volatility_window = st.slider("Volatility Window (Days)", 10, 60, 20)
+            # Use a default volatility_window to reduce recomputation, only recalculate when the slider is released
+            volatility_window = st.slider("Volatility Window (Days)", 10, 60, 20, 
+                                        key="volatility_slider", on_change=None)
             
-            # Generate volatility analysis
-            volatility_fig = plot_performance_by_volatility(df, selected_stock, window=volatility_window)
-            st.plotly_chart(volatility_fig, use_container_width=True)
+            # Show spinner manually to avoid issues with caching
+            with st.spinner("Calculating volatility analysis..."):
+                volatility_fig = get_volatility_tab_content(df, selected_stock, volatility_window)
+                st.plotly_chart(volatility_fig, use_container_width=True)
             
             st.info("""
             This analysis shows the relationship between market volatility and prediction error. A strong positive correlation indicates that the model struggles more during volatile periods.
@@ -454,56 +531,6 @@ else:
             - If most errors occur in specific volatility ranges, those market conditions might require model adjustments.
             - Predictions made during periods with volatility above 0.3 (annualized) typically have higher uncertainty.
             """)
-    
-    # Add a caching function for model evaluations
-    @st.cache_data(ttl=3600, show_spinner=False, max_entries=10)
-    def load_cached_model_evaluations():
-        try:
-            model_eval_df = load_model_evaluations()
-            if not model_eval_df.empty:
-                return model_eval_df
-            return pd.DataFrame()
-        except Exception as e:
-            st.error(f"Error loading model evaluations: {e}")
-            return pd.DataFrame()
-
-    # Load model evaluations only if tab5 is selected to avoid unnecessary database calls
-    if tab5.id == st.get_current_tab_id():
-        with tab5:
-            st.header("Model Evaluation Overview")
-            
-            with st.spinner("Loading model evaluation data..."):
-                try:
-                    model_eval_df = load_cached_model_evaluations()
-                    
-                    if model_eval_df.empty:
-                        st.warning("No model evaluation data available.")
-                    else:
-                        # Continue with model evaluation visualizations...
-                        st.success(f"Loaded evaluation data for {model_eval_df['model_name'].nunique()} models")
-                        
-                        # The rest of your model evaluation code...
-                        # Display model comparison chart
-                        st.subheader("Model Performance Comparison")
-                        model_fig = plot_model_comparison(model_eval_df)
-                        st.plotly_chart(model_fig, use_container_width=True)
-                        
-                        # Display performance over time
-                        st.subheader("Model Performance Over Time")
-                        perf_time_fig = plot_performance_over_time(model_eval_df)
-                        st.plotly_chart(perf_time_fig, use_container_width=True)
-                        
-                        # Display raw data table
-                        with st.expander("View Raw Evaluation Data"):
-                            # Format the timestamp for display
-                            display_df = model_eval_df.copy()
-                            if 'timestamp' in display_df.columns:
-                                display_df['timestamp'] = display_df['timestamp'].dt.strftime('%Y-%m-%d %H:%M:%S')
-                            
-                            st.dataframe(display_df.sort_values(['timestamp', 'model_name', 'stock_symbol'], ascending=[False, True, True]))
-                except Exception as e:
-                    st.error(f"Error processing model evaluation data: {e}")
-                    st.info("This may be due to a database connection issue or timeout. Try refreshing the page.")
 
 # Footer
 st.sidebar.markdown("---")

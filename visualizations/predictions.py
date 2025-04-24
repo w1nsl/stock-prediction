@@ -9,7 +9,7 @@ import psycopg2
 import os
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
-from visualizations.core import get_db_connection
+from visualizations.core import get_db_connection, close_db_connection, with_db_connection
 from sqlalchemy import create_engine, text
 from typing import Dict, List, Tuple, Optional, Union
 import json
@@ -88,11 +88,14 @@ MODEL_INTERPRETATIONS = {
     """
 }
 
-def load_predictions(stock_symbol, start_date=None, end_date=None):
+# Use the connection decorator to ensure proper connection handling
+@with_db_connection
+def load_predictions(conn, stock_symbol, start_date=None, end_date=None):
     """
     Load stock price predictions from database
     
     Args:
+        conn: Database connection (provided by the decorator)
         stock_symbol: Stock ticker symbol
         start_date: Start date in 'YYYY-MM-DD' format
         end_date: End date in 'YYYY-MM-DD' format
@@ -101,28 +104,25 @@ def load_predictions(stock_symbol, start_date=None, end_date=None):
         DataFrame with date, stock_symbol, predicted_price, and actual_price columns
     """
     try:
-        # Get a database connection (either from streamlit secrets or env vars)
-        conn = get_db_connection()
-        
-        if conn is None:
-            print("Failed to establish database connection")
-            return pd.DataFrame()
+        # Note: The connection is now passed as the first argument by the decorator
         
         # Create an SQLAlchemy engine from the psycopg2 connection
         try:
-            import streamlit as st
-            if hasattr(st, 'secrets') and 'db' in st.secrets:
-                # Use Streamlit secrets
-                db_url = f"postgresql://{st.secrets.db.user}:{st.secrets.db.password}@{st.secrets.db.host}:{st.secrets.db.port}/{st.secrets.db.name}"
-            else:
-                # Use environment variables
-                db_url = f"postgresql://{os.getenv('DB_USER')}:{os.getenv('DB_PASSWORD')}@{os.getenv('DB_HOST')}:{os.getenv('DB_PORT')}/{os.getenv('DB_NAME')}"
-            
-            engine = create_engine(db_url)
-            
             # Adjusted query to use 'prediction' column instead of 'predicted_price'
+            # Also pre-calculate error metrics to reduce UI-side computation
             query = """
-            SELECT p.date, p.stock_symbol, p.prediction as predicted_price, m.close_price as actual_price
+            SELECT 
+                p.date, 
+                p.stock_symbol, 
+                p.prediction as predicted_price, 
+                m.close_price as actual_price,
+                (m.close_price - p.prediction) as error,
+                ABS(m.close_price - p.prediction) as abs_error,
+                CASE 
+                    WHEN m.close_price <> 0 THEN 
+                        ((m.close_price - p.prediction) / m.close_price) * 100
+                    ELSE 0
+                END as pct_error
             FROM stock_predictions p
             JOIN merged_stocks_new m 
                 ON p.date = m.date AND p.stock_symbol = m.stock_symbol
@@ -132,33 +132,23 @@ def load_predictions(stock_symbol, start_date=None, end_date=None):
             
             params = [stock_symbol, start_date, end_date]
             
-            # Use SQLAlchemy for the query
-            with engine.connect() as connection:
-                # Execute the query with parameters
-                query_with_params = text(query).bindparams(
-                    param_1=stock_symbol,
-                    param_2=start_date,
-                    param_3=end_date
-                )
-                df = pd.read_sql(
-                    sql=query.replace("%s", ":param_1").replace("%s", ":param_2").replace("%s", ":param_3"),
-                    con=connection,
-                    params={"param_1": stock_symbol, "param_2": start_date, "param_3": end_date}
-                )
-            
-            # Close the original connection
-            conn.close()
+            # Use the passed connection
+            df = pd.read_sql_query(query, conn, params=params)
             
             if df.empty:
                 print(f"No predictions found for {stock_symbol} between {start_date} and {end_date}")
                 return pd.DataFrame()
             
+            # Ensure date is datetime type
+            if 'date' in df.columns and not pd.api.types.is_datetime64_any_dtype(df['date']):
+                df['date'] = pd.to_datetime(df['date'])
+                
             print(f"Successfully loaded {len(df)} predictions for {stock_symbol}")
             return df
         except Exception as e:
             print(f"Error with SQLAlchemy connection: {e}")
             
-            # Fallback to psycopg2 if SQLAlchemy fails
+            # Fallback to simpler query if complex one fails
             query = """
             SELECT p.date, p.stock_symbol, p.prediction as predicted_price, m.close_price as actual_price
             FROM stock_predictions p
@@ -172,11 +162,19 @@ def load_predictions(stock_symbol, start_date=None, end_date=None):
             
             # Load predictions with psycopg2
             df = pd.read_sql_query(query, conn, params=params)
-            conn.close()
             
             if df.empty:
                 print(f"No predictions found for {stock_symbol} between {start_date} and {end_date}")
                 return pd.DataFrame()
+            
+            # Calculate derived metrics
+            df['error'] = df['actual_price'] - df['predicted_price']
+            df['abs_error'] = abs(df['error'])
+            df['pct_error'] = (df['error'] / df['actual_price']) * 100
+            
+            # Ensure date is datetime type
+            if 'date' in df.columns and not pd.api.types.is_datetime64_any_dtype(df['date']):
+                df['date'] = pd.to_datetime(df['date'])
             
             print(f"Successfully loaded {len(df)} predictions for {stock_symbol}")
             return df
