@@ -122,7 +122,10 @@ def load_cached_predictions(stock, start, end):
         return pd.DataFrame()
 
 with st.spinner("Loading prediction data..."):
-    df = load_cached_predictions(selected_stock, start_date_str, end_date_str)
+    df = load_cached_predictions(stock_symbol=selected_stock, start_date=start_date_str, end_date=end_date_str)
+
+# Clear the loading overlay
+loading_state.empty()
 
 if df.empty:
     st.warning("No prediction data found for the selected stock and date range. Please adjust your filters.")
@@ -241,9 +244,14 @@ else:
         - Correlation between errors and market events
         """)
         
-        # Error analysis chart
-        error_fig = plot_error_analysis(df, selected_stock)
-        st.plotly_chart(error_fig, use_container_width=True)
+        # Error analysis chart - only load if not in performance mode
+        if not performance_mode:
+            error_fig = plot_error_analysis(df, selected_stock)
+            st.plotly_chart(error_fig, use_container_width=True)
+        else:
+            with st.spinner("Loading error analysis chart..."):
+                error_fig = plot_error_analysis(df, selected_stock)
+                st.plotly_chart(error_fig, use_container_width=True)
         
         # Error statistics
         st.subheader("Error Statistics")
@@ -310,9 +318,14 @@ else:
         - Multiple peaks (different prediction regimes or market conditions)
         """)
         
-        # Error distribution chart
-        distribution_fig = plot_error_distribution(df, selected_stock)
-        st.plotly_chart(distribution_fig, use_container_width=True)
+        # Error distribution chart - only load if not in performance mode
+        if not performance_mode:
+            distribution_fig = plot_error_distribution(df, selected_stock)
+            st.plotly_chart(distribution_fig, use_container_width=True)
+        else:
+            with st.spinner("Loading error distribution chart..."):
+                distribution_fig = plot_error_distribution(df, selected_stock)
+                st.plotly_chart(distribution_fig, use_container_width=True)
         
         # Error percentiles
         st.subheader("Error Percentiles")
@@ -413,9 +426,14 @@ else:
             # Configure horizon
             max_horizon = st.slider("Maximum Prediction Horizon (Days)", 5, 30, 10)
             
-            # Generate horizon analysis
-            horizon_fig = plot_accuracy_vs_horizon(df, selected_stock, max_days=max_horizon)
-            st.plotly_chart(horizon_fig, use_container_width=True)
+            # Generate horizon analysis - with or without performance mode
+            if not performance_mode:
+                horizon_fig = plot_accuracy_vs_horizon(df, selected_stock, max_days=max_horizon)
+                st.plotly_chart(horizon_fig, use_container_width=True)
+            else:
+                with st.spinner("Calculating prediction accuracy across horizons..."):
+                    horizon_fig = plot_accuracy_vs_horizon(df, selected_stock, max_days=max_horizon)
+                    st.plotly_chart(horizon_fig, use_container_width=True)
             
             st.info("""
             This analysis shows how the model performs when making predictions for different time horizons. 
@@ -428,9 +446,14 @@ else:
             # Configure volatility window
             volatility_window = st.slider("Volatility Window (Days)", 10, 60, 20)
             
-            # Generate volatility analysis
-            volatility_fig = plot_performance_by_volatility(df, selected_stock, window=volatility_window)
-            st.plotly_chart(volatility_fig, use_container_width=True)
+            # Generate volatility analysis - with or without performance mode
+            if not performance_mode:
+                volatility_fig = plot_performance_by_volatility(df, selected_stock, window=volatility_window)
+                st.plotly_chart(volatility_fig, use_container_width=True)
+            else:
+                with st.spinner("Calculating volatility impact on performance..."):
+                    volatility_fig = plot_performance_by_volatility(df, selected_stock, window=volatility_window)
+                    st.plotly_chart(volatility_fig, use_container_width=True)
             
             st.info("""
             This analysis shows the relationship between market volatility and prediction error. A strong positive correlation indicates that the model struggles more during volatile periods.
@@ -466,13 +489,64 @@ else:
         Use these insights to identify which models are performing best, where improvements are needed, and how model performance evolves over time. This information is valuable for model selection, refinement, and deployment decisions.
         """)
         
-        # Load model evaluation data
-        with st.spinner("Loading model evaluation data..."):
-            model_eval_df = load_model_evaluations()
+        # Load model evaluation data with timeout handling
+        load_eval_data = True
+        if performance_mode:
+            load_eval_data = st.checkbox("Load Model Evaluation Data", value=False, 
+                                         help="Loading model evaluation data may take some time. Check this box when you're ready to load.")
         
-        if model_eval_df.empty:
-            st.warning("No model evaluation data available in the database.")
+        if load_eval_data:
+            with st.spinner("Loading model evaluation data..."):
+                try:
+                    # Using threading for timeout (compatible with Windows)
+                    import threading
+                    import queue
+                    
+                    def load_with_timeout(result_queue):
+                        try:
+                            df = load_model_evaluations()
+                            result_queue.put(("success", df))
+                        except Exception as e:
+                            result_queue.put(("error", str(e)))
+                    
+                    # Create a queue for the result
+                    result_queue = queue.Queue()
+                    
+                    # Start the data loading in a separate thread
+                    thread = threading.Thread(target=load_with_timeout, args=(result_queue,))
+                    thread.daemon = True  # The thread will exit when the main program exits
+                    thread.start()
+                    
+                    # Wait for the thread to complete, with a timeout
+                    thread.join(timeout=8)  # 8 second timeout
+                    
+                    # Check if we have a result
+                    if not result_queue.empty():
+                        status, model_eval_df = result_queue.get()
+                        if status == "success" and not model_eval_df.empty():
+                            st.success(f"Successfully loaded model evaluation data")
+                        elif status == "error":
+                            st.error(f"Database error: {model_eval_df}")
+                            # Generate sample model evaluation data
+                            model_eval_df = generate_sample_model_evaluations()
+                        else:
+                            st.warning("Database returned empty results.")
+                            # Generate sample model evaluation data
+                            model_eval_df = generate_sample_model_evaluations()
+                    else:
+                        st.error("Database connection timed out. Using sample data instead.")
+                        # Generate sample model evaluation data
+                        model_eval_df = generate_sample_model_evaluations()
+                        
+                except Exception as e:
+                    st.error(f"Error loading model evaluation data: {str(e)}")
+                    # Generate sample model evaluation data
+                    model_eval_df = generate_sample_model_evaluations()
         else:
+            st.info("Model evaluation data loading is disabled. Enable it using the checkbox above when you're ready to explore this section.")
+            model_eval_df = pd.DataFrame()
+        
+        if not model_eval_df.empty:
             # Show summary metrics
             st.subheader("Model Performance Summary")
             
@@ -492,49 +566,125 @@ else:
             
             # Create sections for different visualizations
             st.subheader("Model Comparison by Stock")
-            model_comp_fig = plot_model_comparison(model_eval_df)
-            if model_comp_fig:
-                st.plotly_chart(model_comp_fig, use_container_width=True)
-                st.info("""
-                This chart shows model performance metrics across different stocks.
-                Lower RMSE/MAE and higher R² indicate better performing models.
-                """)
-            else:
-                st.warning("Could not create model comparison visualization.")
+            
+            with st.spinner("Generating model comparison visualization..."):
+                model_comp_fig = plot_model_comparison(model_eval_df)
+                if model_comp_fig:
+                    st.plotly_chart(model_comp_fig, use_container_width=True)
+                    st.info("""
+                    This chart shows model performance metrics across different stocks.
+                    Lower RMSE/MAE and higher R² indicate better performing models.
+                    """)
+                else:
+                    st.warning("Could not create model comparison visualization.")
             
             # Only show time series if we have training_date
             if 'training_date' in model_eval_df.columns:
                 st.subheader("Performance Trends Over Time")
-                time_fig = plot_performance_over_time(model_eval_df)
-                if time_fig:
-                    st.plotly_chart(time_fig, use_container_width=True)
-                    st.info("""
-                    This chart shows how model performance has changed over time.
-                    It helps identify trends and improvements in model accuracy.
-                    """)
-                    
-                    # Add more detailed interpretation guidance
-                    st.markdown("""
-                    **How to interpret this graph:**
-                    
-                    - **Time Progression**: The x-axis shows model training dates from oldest (left) to newest (right).
-                    - **Multiple Metrics**: Solid lines typically represent accuracy metrics (R²) where higher is better, while dashed lines represent error metrics (RMSE, MAE) where lower is better.
-                    - **Different Stocks**: Each color represents a different stock symbol if multiple stocks are being evaluated.
-                    - **Convergence**: Lines that flatten over time suggest the model is reaching its performance limit.
-                    - **Sudden Changes**: Sharp improvements or degradations can indicate significant model changes or data shifts.
-                    
-                    **What to look for:**
-                    - **Consistent Improvement**: Accuracy metrics should trend upward and error metrics downward over time.
-                    - **Seasonality**: Cyclical patterns in performance may indicate seasonal effects in the market.
-                    - **Diverging Performance**: If some stocks improve while others worsen, it may indicate the model is becoming specialized.
-                    - **Performance Plateaus**: Extended flat periods suggest a need for new features or modeling approaches.
-                    """)
-                else:
-                    st.warning("Could not create performance over time visualization.")
+                
+                with st.spinner("Generating performance trends visualization..."):
+                    time_fig = plot_performance_over_time(model_eval_df)
+                    if time_fig:
+                        st.plotly_chart(time_fig, use_container_width=True)
+                        st.info("""
+                        This chart shows how model performance has changed over time.
+                        It helps identify trends and improvements in model accuracy.
+                        """)
+                        
+                        # Add more detailed interpretation guidance
+                        with st.expander("Detailed Interpretation Guide"):
+                            st.markdown("""
+                            **How to interpret this graph:**
+                            
+                            - **Time Progression**: The x-axis shows model training dates from oldest (left) to newest (right).
+                            - **Multiple Metrics**: Solid lines typically represent accuracy metrics (R²) where higher is better, while dashed lines represent error metrics (RMSE, MAE) where lower is better.
+                            - **Different Stocks**: Each color represents a different stock symbol if multiple stocks are being evaluated.
+                            - **Convergence**: Lines that flatten over time suggest the model is reaching its performance limit.
+                            - **Sudden Changes**: Sharp improvements or degradations can indicate significant model changes or data shifts.
+                            
+                            **What to look for:**
+                            - **Consistent Improvement**: Accuracy metrics should trend upward and error metrics downward over time.
+                            - **Seasonality**: Cyclical patterns in performance may indicate seasonal effects in the market.
+                            - **Diverging Performance**: If some stocks improve while others worsen, it may indicate the model is becoming specialized.
+                            - **Performance Plateaus**: Extended flat periods suggest a need for new features or modeling approaches.
+                            """)
+                    else:
+                        st.warning("Could not create performance over time visualization.")
             
             # Show raw data in expandable section
             with st.expander("View Raw Model Evaluation Data"):
                 st.dataframe(model_eval_df)
+        elif load_eval_data:
+            st.warning("No model evaluation data available.")
+
+def generate_sample_model_evaluations():
+    """Generate sample model evaluation data for demonstration"""
+    import numpy as np
+    from datetime import datetime, timedelta
+    
+    # Generate dates for last 6 months
+    end_date = datetime.now()
+    start_date = end_date - timedelta(days=180)
+    dates = pd.date_range(start=start_date, end=end_date, freq='W')  # Weekly models
+    
+    # Stock symbols
+    stocks = ['AAPL', 'MSFT', 'GOOG', 'AMZN', 'META']
+    
+    # Create sample data
+    rows = []
+    
+    for stock in stocks:
+        # Base metrics - different for each stock
+        if stock == 'AAPL':
+            base_rmse = 2.5
+            base_mae = 1.8
+            base_r2 = 0.75
+            improvement_rate = 0.05  # 5% improvement over time
+        elif stock == 'MSFT':
+            base_rmse = 3.2
+            base_mae = 2.1
+            base_r2 = 0.72
+            improvement_rate = 0.08
+        elif stock == 'GOOG':
+            base_rmse = 2.8
+            base_mae = 1.9
+            base_r2 = 0.78
+            improvement_rate = 0.06
+        elif stock == 'AMZN':
+            base_rmse = 3.5
+            base_mae = 2.3
+            base_r2 = 0.68
+            improvement_rate = 0.07
+        else:
+            base_rmse = 3.0
+            base_mae = 2.0
+            base_r2 = 0.70
+            improvement_rate = 0.04
+        
+        # Generate models over time with gradual improvement
+        for i, date in enumerate(dates):
+            # Improvement factor (0 to 1) based on date
+            time_factor = i / (len(dates) - 1) if len(dates) > 1 else 0
+            
+            # Calculate metrics with improvement and some noise
+            rmse = base_rmse * (1 - (time_factor * improvement_rate)) * (1 + np.random.normal(0, 0.05))
+            mae = base_mae * (1 - (time_factor * improvement_rate)) * (1 + np.random.normal(0, 0.05))
+            r2 = min(0.98, base_r2 + (time_factor * improvement_rate) * (1 + np.random.normal(0, 0.03)))
+            
+            # Add row for this model
+            rows.append({
+                'model_id': f"{stock}_model_{i+1}",
+                'stock_symbol': stock,
+                'training_date': date,
+                'model_type': np.random.choice(['lstm', 'xgboost', 'lightgbm']),
+                'rmse': rmse,
+                'mae': mae,
+                'r2': r2,
+                'mape': (mae / 100) * np.random.uniform(10, 15),
+                'direction_accuracy': 50 + (time_factor * 10) + np.random.normal(0, 3)
+            })
+    
+    return pd.DataFrame(rows)
 
 # Footer
 st.sidebar.markdown("---")
