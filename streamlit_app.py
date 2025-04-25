@@ -55,11 +55,10 @@ def main():
         layout="wide"
     )
     
-    # Header
-    st.title("Stock Price Prediction Dashboard")
-    
     # Show a spinner while initializing
     if initialized == False:
+        # Show title only during initialization
+        st.title("Stock Price Prediction Dashboard")
         st.info("Dashboard is initializing, please wait...")
         st.spinner("Loading dependencies and connecting to database...")
         # Add a placeholder that will be replaced when initialization is complete

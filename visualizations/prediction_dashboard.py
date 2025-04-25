@@ -30,7 +30,7 @@ load_dotenv()
 # Page config - only set if not being called from streamlit_app.py
 if os.environ.get('SKIP_PAGE_CONFIG') != 'true':
     st.set_page_config(
-        page_title="Stock Prediction Performance Dashboard",
+        page_title="Stock Price Prediction Dashboard",
         page_icon="📊",
         layout="wide"
     )
@@ -38,12 +38,19 @@ if os.environ.get('SKIP_PAGE_CONFIG') != 'true':
 # Get URL parameters
 params = st.query_params
 
-# Title and description
-st.title("Stock Prediction Performance Dashboard")
-st.markdown("""
-This dashboard analyzes the performance of stock price predictions, showing comparison to actual prices,
-error analysis, and model performance metrics.
-""")
+# Title and description - only show if not called from main app
+if os.environ.get('SKIP_PAGE_CONFIG') != 'true':
+    st.title("Stock Prediction Performance Dashboard")
+    st.markdown("""
+    This dashboard analyzes the performance of stock price predictions, showing comparison to actual prices,
+    error analysis, and model performance metrics.
+    """)
+else:
+    # Just show description when called from main app
+    st.markdown("""
+    This dashboard analyzes the performance of stock price predictions, showing comparison to actual prices,
+    error analysis, and model performance metrics.
+    """)
 
 # Sidebar filters
 st.sidebar.header("Filters")
@@ -111,25 +118,25 @@ def load_cached_predictions(stock, start, end):
         # Try to load from database
         with st.spinner(f"Loading data for {stock}..."):
             df = load_predictions(stock_symbol=stock, start_date=start, end_date=end)
-        
-        # If we got data back, return it
-        if not df.empty:
-            st.success(f"Successfully loaded prediction data from database")
-            # Pre-calculate derived columns to avoid repeated calculations
-            df['error'] = df['actual_price'] - df['predicted_price']
-            df['abs_error'] = abs(df['error'])
-            df['pct_error'] = (df['error'] / df['actual_price']) * 100
             
-            # Ensure date is datetime
-            if not pd.api.types.is_datetime64_any_dtype(df['date']):
-                df['date'] = pd.to_datetime(df['date'])
+            # If we got data back, return it
+            if not df.empty:
+                st.success(f"Successfully loaded prediction data from database")
+                # Pre-calculate derived columns to avoid repeated calculations
+                df['error'] = df['actual_price'] - df['predicted_price']
+                df['abs_error'] = abs(df['error'])
+                df['pct_error'] = (df['error'] / df['actual_price']) * 100
                 
-            return df
-            
-        # If no data was found, return empty DataFrame
-        st.error(f"No predictions found in database for {stock} between {start} and {end}")
-        st.info("Please check your database connection or try a different stock/date range.")
-        return pd.DataFrame()
+                # Ensure date is datetime
+                if not pd.api.types.is_datetime64_any_dtype(df['date']):
+                    df['date'] = pd.to_datetime(df['date'])
+                    
+                return df
+                
+            # If no data was found, return empty DataFrame
+            st.error(f"No predictions found in database for {stock} between {start} and {end}")
+            st.info("Please check your database connection or try a different stock/date range.")
+            return pd.DataFrame()
     except Exception as e:
         st.error(f"Error loading predictions from database: {e}")
         st.info("Please check your database connection and credentials.")
@@ -545,7 +552,7 @@ else:
             # Show spinner manually to avoid issues with caching
             with st.spinner("Calculating horizon analysis..."):
                 horizon_fig = get_horizon_tab_content(df, selected_stock, max_horizon)
-                st.plotly_chart(horizon_fig, use_container_width=True)
+            st.plotly_chart(horizon_fig, use_container_width=True)
             
             st.info("""
             This analysis shows how the model performs when making predictions for different time horizons. 
@@ -563,7 +570,7 @@ else:
             # Show spinner manually to avoid issues with caching
             with st.spinner("Calculating volatility analysis..."):
                 volatility_fig = get_volatility_tab_content(df, selected_stock, volatility_window)
-                st.plotly_chart(volatility_fig, use_container_width=True)
+            st.plotly_chart(volatility_fig, use_container_width=True)
             
             st.info("""
             This analysis shows the relationship between market volatility and prediction error. A strong positive correlation indicates that the model struggles more during volatile periods.
