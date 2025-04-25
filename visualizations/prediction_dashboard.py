@@ -38,19 +38,12 @@ if os.environ.get('SKIP_PAGE_CONFIG') != 'true':
 # Get URL parameters
 params = st.query_params
 
-# Title and description - only show if not called from main app
-if os.environ.get('SKIP_PAGE_CONFIG') != 'true':
-    st.title("Stock Prediction Performance Dashboard")
-    st.markdown("""
-    This dashboard analyzes the performance of stock price predictions, showing comparison to actual prices,
-    error analysis, and model performance metrics.
-    """)
-else:
-    # Just show description when called from main app
-    st.markdown("""
-    This dashboard analyzes the performance of stock price predictions, showing comparison to actual prices,
-    error analysis, and model performance metrics.
-    """)
+# Always display the title regardless of how the dashboard is called
+st.title("Stock Prediction Performance Dashboard")
+st.markdown("""
+This dashboard analyzes the performance of stock price predictions, showing comparison to actual prices,
+error analysis, and model performance metrics.
+""")
 
 # Sidebar filters
 st.sidebar.header("Filters")
